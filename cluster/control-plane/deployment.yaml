@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: arenaservice
+  namespace: control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: arenaservice
+  template:
+    metadata:
+      labels:
+        app: arenaservice
+    spec:
+      containers:
+        - name: controller
+          image: yourrepo/arenaservice:latest # TODO: Replace with your controller image
+          ports:
+            - containerPort: 443
+              name: grpc
+              protocol: TCP
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          volumeMounts:
+            - name: wg-config
+              mountPath: /etc/wireguard
+        - name: vpn
+          image: linuxserver/wireguard:latest # TODO: Replace with your WireGuard image if needed
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 11820
+              name: wireguard
+              protocol: UDP
+          volumeMounts:
+            - name: wg-config
+              mountPath: /etc/wireguard
+      volumes:
+        - name: wg-config
+          emptyDir: {} 

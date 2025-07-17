@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: arena-area-quota
+  namespace: arena-area
+spec:
+  hard:
+    pods: "100"           # Example: max 100 pods
+    requests.cpu: "20"    # Example: max 20 CPU cores requested
+    requests.memory: 64Gi  # Example: max 64Gi memory requested
+    limits.cpu: "40"      # Example: max 40 CPU cores limited
+    limits.memory: 128Gi   # Example: max 128Gi memory limited
+  # Adjust these values as needed for your environment. 

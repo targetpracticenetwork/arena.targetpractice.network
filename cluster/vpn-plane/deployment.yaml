@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wireguard-vpn
+  namespace: vpn-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wireguard-vpn
+  template:
+    metadata:
+      labels:
+        app: wireguard-vpn
+    spec:
+      containers:
+        - name: wireguard
+          image: linuxserver/wireguard:latest # TODO: Replace with your WireGuard image if needed
+          securityContext:
+            privileged: true
+          ports:
+            - containerPort: 11820
+              name: wireguard
+              protocol: UDP
+          volumeMounts:
+            - name: wg-config
+              mountPath: /etc/wireguard
+      volumes:
+        - name: wg-config
+          emptyDir: {} 

@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package arena;
+
+option go_package = "arena/internal/arena;arena";
+
+service ArenaService {
+  rpc CreateArena(CreateArenaRequest) returns (CreateArenaResponse);
+  rpc DestroyArena(DestroyArenaRequest) returns (DestroyArenaResponse);
+  rpc GetArenaStatus(GetArenaStatusRequest) returns (GetArenaStatusResponse);
+}
+
+// Request to create an arena
+message CreateArenaRequest {
+  string public_key = 1;
+  string vpn_ip = 2;
+  string challenge_name = 3;
+  string challenge_spec = 4;
+}
+
+// Response with arena configuration
+message CreateArenaResponse {
+  ArenaConfig config = 1;
+  string error = 2;
+}
+
+// Request to destroy an arena
+message DestroyArenaRequest {
+  string public_key = 1;
+}
+
+// Response for destroy operation
+message DestroyArenaResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// Request to get arena status
+message GetArenaStatusRequest {
+  string public_key = 1;
+}
+
+// Response with arena status
+message GetArenaStatusResponse {
+  ArenaStatus status = 1;
+  string error = 2;
+}
+
+// Arena configuration details
+message ArenaConfig {
+  string public_key = 1;
+  string allowed_ip = 2;
+  string challenge_id = 3;
+  string namespace = 4;
+  repeated ServiceEndpoint endpoints = 5;
+}
+
+// Service endpoint details
+message ServiceEndpoint {
+  string name = 1;
+  string cluster_ip = 2;
+  repeated int32 ports = 3;
+}
+
+// VPN peer status details
+message PeerStatus {
+  string public_key = 1;
+  string endpoint = 2;
+  repeated string allowed_ips = 3;
+  int64 last_handshake = 4;
+  int64 rx_bytes = 5;
+  int64 tx_bytes = 6;
+}
+
+// Comprehensive arena status
+message ArenaStatus {
+  string public_key = 1;
+  string namespace = 2;
+  PeerStatus vpn_status = 3;
+  NamespaceStatus k8s_status = 4;
+  bool healthy = 5;
+  repeated string errors = 6;
+}
+
+// Kubernetes namespace status
+message NamespaceStatus {
+  string name = 1;
+  string phase = 2;
+  map<string, string> labels = 3;
+  int32 pod_count = 4;
+  int32 service_count = 5;
+  int32 pods_running = 6;
+  int32 pods_pending = 7;
+  int32 pods_failed = 8;
+  int32 pods_succeeded = 9;
+  int32 pods_unknown = 10;
+  int32 services_ready = 11;
+  int32 services_total = 12;
+  ResourceUsage resource_usage = 13;
+  bool network_policy_applied = 14;
+  repeated string errors = 15;
+  repeated PodStatus pods = 16;
+  repeated ServiceStatus services = 17;
+}
+
+// Pod status details
+message PodStatus {
+  string name = 1;
+  string phase = 2;
+  bool ready = 3;
+  int32 restarts = 4;
+  string age = 5;
+  string ip = 6;
+  string host_ip = 7;
+  map<string, string> labels = 8;
+  repeated ContainerStatus containers = 9;
+}
+
+// Container status details
+message ContainerStatus {
+  string name = 1;
+  bool ready = 2;
+  int32 restart_count = 3;
+  string state = 4;
+  string image = 5;
+}
+
+// Service status details
+message ServiceStatus {
+  string name = 1;
+  string type = 2;
+  string cluster_ip = 3;
+  repeated int32 ports = 4;
+  int32 endpoints = 5;
+  bool ready = 6;
+  map<string, string> labels = 7;
+}
+
+// Resource usage information
+message ResourceUsage {
+  string cpu = 1;
+  string memory = 2;
+  string pods = 3;
+} 
