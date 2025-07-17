@@ -77,4 +77,5 @@ coverage.html
 *.pprof
 
 # Air live reload (if you use it)
-tmp/ 
+tmp/ arenaclient
+arenaserver

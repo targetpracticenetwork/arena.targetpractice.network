@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  arenaservice:
+    build: .
+    container_name: arenaservice
+    privileged: true  # Required for WireGuard and network operations
+    network_mode: host  # Required for WireGuard to work properly
+    environment:
+      - WIREGUARD_INTERFACE=wg0
+      - WIREGUARD_ADDRESS=10.0.0.1/24
+      - WIREGUARD_PORT=11820
+      - GRPC_LISTEN_ADDR=:443
+      - ARENA_INSECURE_DISABLE_MTLS=true  # For development
+    volumes:
+      - /etc/wireguard:/etc/wireguard:rw
+      - /var/run/wireguard:/var/run/wireguard:rw
+    ports:
+      - "443:443"
+      - "11820:11820/udp"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wg", "show", "wg0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s 
