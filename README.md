@@ -17,14 +17,10 @@ arena/
 │   └── config/              # Configuration loading/validation
 ├── pkg/                     # (Optional) Public Go packages for extension
 ├── cluster/                 # Cluster bootstrap/configuration (see below)
-│   ├── base/                # Core manifests: CRDs, RBAC, baseline namespaces
-│   ├── control-plane/       # Control plane infra (ArenaService, admin tools)
-│   ├── vpn-plane/           # VPN infra (WireGuard DaemonSet, etc.)
+│   ├── control-plane/       # Control plane infra (ArenaService with integrated WireGuard)
 │   ├── arena-area/          # Baseline for user challenge area (network policies, quotas)
-│   ├── overlays/            # Kustomize overlays for dev/staging/prod
 │   └── README.md            # Cluster setup instructions
-├── scripts/                 # Helper scripts (e.g., cluster bootstrap)
-├── Dockerfile
+├── scripts/                 # Helper scripts (setup.sh, k3s-setup.sh, wireguard-setup.sh)
 ├── Makefile
 └── README.md
 ```

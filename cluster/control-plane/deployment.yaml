@@ -14,29 +14,36 @@ spec:
         app: arenaservice
     spec:
       containers:
-        - name: controller
-          image: yourrepo/arenaservice:latest # TODO: Replace with your controller image
+        - name: arenaservice
+          image: docker.io/library/alpine:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - |
+              apk add --no-cache wireguard-tools iptables iproute2 bash
+              ip link add dev wg0 type wireguard
+              /opt/arenaservice/arenaservice-static
           ports:
             - containerPort: 443
               name: grpc
               protocol: TCP
-          securityContext:
-            capabilities:
-              add: ["NET_ADMIN"]
-          volumeMounts:
-            - name: wg-config
-              mountPath: /etc/wireguard
-        - name: vpn
-          image: linuxserver/wireguard:latest # TODO: Replace with your WireGuard image if needed
-          securityContext:
-            privileged: true
-          ports:
             - containerPort: 11820
               name: wireguard
               protocol: UDP
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN"]
           volumeMounts:
+            - name: arenaservice-binary
+              mountPath: /opt/arenaservice
             - name: wg-config
               mountPath: /etc/wireguard
       volumes:
+        - name: arenaservice-binary
+          hostPath:
+            path: /home/topman/arena.targetpractice.network/bin
+            type: Directory
         - name: wg-config
           emptyDir: {} 

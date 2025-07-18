@@ -1,34 +1,25 @@
-# Makefile for ArenaService
+# Makefile for ArenaService (k3s optimized)
 
-.PHONY: build run stop clean test docker-build docker-run docker-stop k3s-setup k3s-stop k3s-clean
+.PHONY: build test k3s-setup k3s-stop k3s-clean setup
 
 # Build the Go application
 build:
 	go build -o bin/arenaservice ./cmd/arenaservice
 
-# Run the application locally (requires WireGuard setup)
-run: build
-	./bin/arenaservice
+# Build static binary for k3s deployment
+build-static:
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -o bin/arenaservice-static ./cmd/arenaservice
 
 # Run tests
 test:
 	go test -v ./...
 
-# Build Docker image
-docker-build:
-	docker build -t arenaservice:latest .
 
-# Run with Docker Compose
-docker-run:
-	docker-compose up -d
 
-# Stop Docker Compose
-docker-stop:
-	docker-compose down
-
-# View logs
-docker-logs:
-	docker-compose logs -f arenaservice
+# Server setup (replaces old hetzner/arm setup scripts)
+setup:
+	chmod +x scripts/setup.sh
+	./scripts/setup.sh
 
 # k3s cluster setup
 k3s-setup:
@@ -52,18 +43,24 @@ k3s-status:
 k3s-logs:
 	kubectl logs -n control-plane deployment/arenaservice -f
 
+# Deploy ArenaService to k3s
+k3s-deploy: build-static
+	chmod +x scripts/deploy.sh
+	./scripts/deploy.sh
+
+# Restart ArenaService in k3s
+k3s-restart: build-static
+	kubectl rollout restart deployment/arenaservice -n control-plane
+	@echo "ArenaService restarted in k3s cluster"
+
 # Clean up
 clean:
 	rm -rf bin/
-	docker-compose down --volumes --remove-orphans
-	docker rmi arenaservice:latest 2>/dev/null || true
 
-# Build and run in one command
-docker-build-run: docker-build docker-run
-
-# Show WireGuard status
-wg-status:
-	docker exec arenaservice wg show wg0
+# Clean up k3s deployment
+k3s-clean-deployment:
+	kubectl delete -k cluster/control-plane/ 2>/dev/null || true
+	@echo "ArenaService deployment cleaned up from k3s cluster"
 
 # Generate WireGuard keys
 wg-genkeys:
@@ -77,19 +74,17 @@ wg-genkeys:
 help:
 	@echo "Available commands:"
 	@echo "  build              - Build Go application"
-	@echo "  run                - Run application locally"
+	@echo "  build-static       - Build static binary for k3s deployment"
 	@echo "  test               - Run tests"
-	@echo "  docker-build       - Build Docker image"
-	@echo "  docker-run         - Start with Docker Compose"
-	@echo "  docker-stop        - Stop Docker Compose"
-	@echo "  docker-logs        - View logs"
-	@echo "  docker-build-run   - Build and run in one command"
+	@echo "  setup              - Set up server (firewall, k3s, etc.)"
 	@echo "  k3s-setup          - Set up k3s cluster"
+	@echo "  k3s-deploy         - Deploy ArenaService to k3s"
+	@echo "  k3s-restart        - Restart ArenaService in k3s"
 	@echo "  k3s-stop           - Stop k3s cluster"
 	@echo "  k3s-clean          - Uninstall k3s"
+	@echo "  k3s-clean-deployment - Clean up ArenaService deployment"
 	@echo "  k3s-status         - Show k3s cluster status"
 	@echo "  k3s-logs           - Show ArenaService logs in k3s"
-	@echo "  wg-status          - Show WireGuard status"
 	@echo "  wg-genkeys         - Generate WireGuard key pair"
-	@echo "  clean              - Clean up build artifacts and containers"
+	@echo "  clean              - Clean up build artifacts"
 	@echo "  help               - Show this help" 

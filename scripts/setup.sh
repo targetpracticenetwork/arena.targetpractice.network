@@ -2,21 +2,18 @@
 
 set -e
 
-echo "🚀 Setting up Hetzner CAX11 ARM server for ArenaService..."
+echo "🚀 Setting up server for ArenaService with k3s..."
 
 # Check architecture
 ARCH=$(uname -m)
-if [ "$ARCH" != "aarch64" ]; then
-    echo "⚠️  Warning: This script is optimized for ARM64 (aarch64)"
-    echo "   Current architecture: $ARCH"
-fi
+echo "📋 Architecture: $ARCH"
 
 # Update system
 echo "📦 Updating system packages..."
 sudo apt update && sudo apt upgrade -y
 
-# Install ARM-optimized packages
-echo "📦 Installing ARM-optimized packages..."
+# Install essential packages
+echo "📦 Installing essential packages..."
 sudo apt install -y \
     curl \
     wget \
@@ -30,10 +27,9 @@ sudo apt install -y \
     python3-certbot-nginx \
     wireguard-tools \
     iptables \
-    iproute2 \
-    containerd.io
+    iproute2
 
-# Configure firewall for ARM
+# Configure firewall
 echo "🔥 Configuring firewall..."
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
@@ -48,15 +44,17 @@ echo "🛡️ Configuring fail2ban..."
 sudo systemctl enable fail2ban
 sudo systemctl start fail2ban
 
-# Install Docker for ARM
-echo "🐳 Installing Docker for ARM..."
-curl -fsSL https://get.docker.com -o get-docker.sh
-sudo sh get-docker.sh
-sudo usermod -aG docker $USER
 
-# Install k3s optimized for ARM
-echo "☸️ Installing k3s for ARM..."
-curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy --write-kubeconfig-mode=644 --docker" sh -
+
+# Install k3s with architecture-specific optimizations
+echo "☸️ Installing k3s..."
+if [ "$ARCH" = "aarch64" ]; then
+    echo "📱 Installing k3s for ARM64..."
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy --write-kubeconfig-mode=644" sh -
+else
+    echo "💻 Installing k3s for x86_64..."
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy --write-kubeconfig-mode=644" sh -
+fi
 
 # Wait for k3s to be ready
 echo "⏳ Waiting for k3s to start..."
@@ -69,71 +67,52 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 echo "🔍 Verifying k3s installation..."
 kubectl get nodes
 
-# Check ARM architecture in k3s
-echo "🏗️ Checking ARM architecture support..."
-kubectl get nodes -o wide
-
-# Install ARM-compatible ingress controller
-echo "📦 Installing ARM-compatible ingress controller..."
+# Install ingress controller
+echo "📦 Installing ingress controller..."
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/baremetal/deploy.yaml
 
-# Create ARM-optimized systemd service for ArenaService
-echo "🔧 Creating ARM-optimized systemd service..."
-sudo tee /etc/systemd/system/arenaservice.service > /dev/null <<EOF
-[Unit]
-Description=ArenaService (ARM Optimized)
-After=network.target
+# Build and deploy ArenaService to k3s
+echo "🔨 Building and deploying ArenaService to k3s..."
+if [ -d "/home/topman/arena.targetpractice.network" ]; then
+    cd /home/topman/arena.targetpractice.network
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -o bin/arenaservice-static ./cmd/arenaservice
+    kubectl apply -k ./cluster/control-plane/
+    echo "✅ ArenaService deployed to k3s"
+else
+    echo "⚠️  ArenaService repository not found at /home/topman/arena.targetpractice.network"
+    echo "   Run 'make k3s-deploy' after cloning the repository"
+fi
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/arenaservice
-ExecStart=/opt/arenaservice/arenaservice
-Restart=always
-RestartSec=10
-Environment=WIREGUARD_INTERFACE=wg0
-Environment=GRPC_LISTEN_ADDR=:443
-Environment=ARENA_INSECURE_DISABLE_MTLS=false
-Environment=GOMAXPROCS=2
-Environment=GOARCH=arm64
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-# Enable services
-sudo systemctl daemon-reload
-sudo systemctl enable arenaservice
-
-# Create ARM-specific monitoring script
-echo "📊 Creating ARM monitoring script..."
-sudo tee /opt/monitor-arena-arm.sh > /dev/null <<EOF
+# Create monitoring script
+echo "📊 Creating monitoring script..."
+sudo tee /opt/monitor-arena.sh > /dev/null <<EOF
 #!/bin/bash
-echo "=== ARM Server Status ==="
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+echo "=== Server Status ==="
 echo "Architecture: \$(uname -m)"
 echo "CPU: \$(nproc) cores"
 echo "Memory: \$(free -h | grep Mem | awk '{print \$2}')"
 echo ""
+echo "=== k3s Cluster Status ==="
+kubectl get nodes
+echo ""
 echo "=== ArenaService Status ==="
 kubectl get pods --all-namespaces
 echo ""
-echo "=== WireGuard Status ==="
-wg show wg0 2>/dev/null || echo "WireGuard not running"
+echo "=== ArenaService Logs ==="
+kubectl logs -n control-plane deployment/arenaservice --tail=10 2>/dev/null || echo "ArenaService not running"
 echo ""
 echo "=== System Resources ==="
 free -h
 echo ""
 df -h
-echo ""
-echo "=== ARM Performance ==="
-top -bn1 | grep "Cpu(s)" | awk '{print \$2}' | cut -d'%' -f1
 EOF
 
-sudo chmod +x /opt/monitor-arena-arm.sh
+sudo chmod +x /opt/monitor-arena.sh
 
-# Create ARM-optimized backup script
-echo "💾 Creating ARM backup script..."
-sudo tee /opt/backup-arena-arm.sh > /dev/null <<EOF
+# Create backup script
+echo "💾 Creating backup script..."
+sudo tee /opt/backup-arena.sh > /dev/null <<EOF
 #!/bin/bash
 BACKUP_DIR="/opt/backups/\$(date +%Y%m%d_%H%M%S)"
 mkdir -p \$BACKUP_DIR
@@ -148,16 +127,16 @@ sudo cp -r /etc/wireguard \$BACKUP_DIR/
 sudo cp -r /opt/arenaservice \$BACKUP_DIR/
 
 # Backup system info
-echo "ARM64 Server Backup" > \$BACKUP_DIR/system-info.txt
+echo "Server Backup" > \$BACKUP_DIR/system-info.txt
 uname -a >> \$BACKUP_DIR/system-info.txt
 echo "" >> \$BACKUP_DIR/system-info.txt
 echo "CPU Info:" >> \$BACKUP_DIR/system-info.txt
 lscpu >> \$BACKUP_DIR/system-info.txt
 
-echo "ARM backup created: \$BACKUP_DIR"
+echo "Backup created: \$BACKUP_DIR"
 EOF
 
-sudo chmod +x /opt/backup-arena-arm.sh
+sudo chmod +x /opt/backup-arena.sh
 
 # Set up log rotation
 echo "📝 Setting up log rotation..."
@@ -173,14 +152,10 @@ sudo tee /etc/logrotate.d/arenaservice > /dev/null <<EOF
 }
 EOF
 
-# ARM-specific optimizations
-echo "⚡ Applying ARM-specific optimizations..."
-
-# Optimize for ARM CPU
+# Apply system optimizations
+echo "⚡ Applying system optimizations..."
 echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
 echo 'vm.vfs_cache_pressure=50' | sudo tee -a /etc/sysctl.conf
-
-# Optimize for NVMe storage
 echo 'vm.dirty_ratio=15' | sudo tee -a /etc/sysctl.conf
 echo 'vm.dirty_background_ratio=5' | sudo tee -a /etc/sysctl.conf
 
@@ -188,9 +163,9 @@ echo 'vm.dirty_background_ratio=5' | sudo tee -a /etc/sysctl.conf
 sudo sysctl -p
 
 echo ""
-echo "🎉 Hetzner CAX11 ARM server setup complete!"
+echo "🎉 Server setup complete!"
 echo ""
-echo "📋 ARM Server Info:"
+echo "📋 Server Info:"
 echo "  Architecture: $(uname -m)"
 echo "  CPU Cores: $(nproc)"
 echo "  Memory: $(free -h | grep Mem | awk '{print $2}')"
@@ -198,30 +173,28 @@ echo "  Storage: $(df -h / | awk 'NR==2 {print $2}')"
 echo ""
 echo "📋 Next steps:"
 echo "1. Clone your ArenaService repository"
-echo "2. Build for ARM64: GOOS=linux GOARCH=arm64 go build"
-echo "3. Run: make k3s-setup"
-echo "4. Configure SSL certificates"
-echo "5. Set up monitoring"
+echo "2. Run: make k3s-deploy"
+echo "3. Configure SSL certificates"
+echo "4. Set up monitoring"
 echo ""
 echo "🔗 Useful commands:"
-echo "  /opt/monitor-arena-arm.sh    - Check ARM system status"
-echo "  /opt/backup-arena-arm.sh     - Create ARM backup"
+echo "  /opt/monitor-arena.sh    - Check system status"
+echo "  /opt/backup-arena.sh     - Create backup"
 echo "  sudo systemctl status k3s"
-echo "  sudo systemctl status arenaservice"
+echo "  kubectl get pods --all-namespaces"
+echo "  kubectl logs -n control-plane deployment/arenaservice"
 echo ""
 echo "🛡️ Security:"
 echo "  - Firewall configured (UFW)"
 echo "  - Fail2ban enabled"
 echo "  - SSH access only"
 echo ""
-echo "⚡ ARM Optimizations:"
+echo "⚡ Optimizations:"
 echo "  - CPU scheduling optimized"
 echo "  - Memory management tuned"
-echo "  - NVMe storage optimized"
-echo "  - k3s ARM64 support enabled"
+echo "  - k3s $(uname -m) support enabled"
 echo ""
 echo "📊 Expected Performance:"
 echo "  - 5-10 concurrent arenas"
 echo "  - Fast arena creation (< 3s)"
-echo "  - Efficient resource usage"
-echo "  - Low power consumption" 
+echo "  - Efficient resource usage" 

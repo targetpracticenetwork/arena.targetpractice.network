@@ -29,20 +29,16 @@ kubectl get pods --all-namespaces
 echo "📦 Installing additional tools..."
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/baremetal/deploy.yaml
 
+# Build static binary for deployment
+echo "🔨 Building static binary for ArenaService..."
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -o bin/arenaservice-static ./cmd/arenaservice
+
 # Apply ArenaService cluster configuration
 echo "🏗️ Applying ArenaService cluster configuration..."
 
-# Base configuration
-echo "📋 Applying base configuration..."
-kubectl apply -k ./cluster/base
-
-# Control plane
+# Control plane (includes integrated WireGuard)
 echo "🎮 Applying control plane..."
 kubectl apply -k ./cluster/control-plane
-
-# VPN plane
-echo "🔒 Applying VPN plane..."
-kubectl apply -k ./cluster/vpn-plane
 
 # Arena area
 echo "🏟️ Applying arena area..."

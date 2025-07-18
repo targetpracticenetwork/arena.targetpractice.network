@@ -34,7 +34,4 @@ testdata/
 *.log
 
 # Kubernetes manifests (not needed in container)
-cluster/
-
-# Scripts (will be copied explicitly)
-scripts/ 
+cluster/ 
