@@ -397,29 +397,37 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 
 	// Create services
 	var services []*v1.Service
-	var endpoints []*ServiceEndpoint
 	for _, svcSpec := range spec.Services {
 		svc, err := k.createServiceFromSpec(namespace, svcSpec)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create service %s: %w", svcSpec.Name, err)
 		}
 		services = append(services, svc)
+	}
 
-		// Create endpoint info
+	// Create the services
+	if err := k.CreateServices(namespace, services); err != nil {
+		return nil, fmt.Errorf("failed to create services: %w", err)
+	}
+
+	// Now fetch the created services to get their assigned cluster IPs
+	var endpoints []*ServiceEndpoint
+	for _, svcSpec := range spec.Services {
+		createdSvc, err := k.clientset.CoreV1().Services(namespace).Get(context.Background(), svcSpec.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get created service %s: %w", svcSpec.Name, err)
+		}
+
+		// Create endpoint info with the actual cluster IP
 		endpoint := &ServiceEndpoint{
 			Name:      svcSpec.Name,
-			ClusterIp: svc.Spec.ClusterIP,
+			ClusterIp: createdSvc.Spec.ClusterIP,
 			Ports:     make([]int32, len(svcSpec.Ports)),
 		}
 		for i, port := range svcSpec.Ports {
 			endpoint.Ports[i] = port.Port
 		}
 		endpoints = append(endpoints, endpoint)
-	}
-
-	// Create the services
-	if err := k.CreateServices(namespace, services); err != nil {
-		return nil, fmt.Errorf("failed to create services: %w", err)
 	}
 
 	return endpoints, nil
