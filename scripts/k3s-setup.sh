@@ -9,7 +9,7 @@ if command -v k3s > /dev/null 2>&1; then
     echo "✅ k3s is already installed"
 else
     echo "📦 Installing k3s..."
-    curl -sfL https://get.k3s.io | sh -
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik" sh -
     
     # Wait for k3s to be ready
     echo "⏳ Waiting for k3s to start..."

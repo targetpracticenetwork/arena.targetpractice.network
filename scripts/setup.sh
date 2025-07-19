@@ -50,10 +50,10 @@ sudo systemctl start fail2ban
 echo "☸️ Installing k3s..."
 if [ "$ARCH" = "aarch64" ]; then
     echo "📱 Installing k3s for ARM64..."
-    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy --write-kubeconfig-mode=644" sh -
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --write-kubeconfig-mode=644" sh -
 else
     echo "💻 Installing k3s for x86_64..."
-    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--flannel-backend=none --disable-network-policy --write-kubeconfig-mode=644" sh -
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --write-kubeconfig-mode=644" sh -
 fi
 
 # Wait for k3s to be ready

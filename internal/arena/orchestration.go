@@ -1,7 +1,8 @@
 package arena
 
 import (
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/base32"
 	"fmt"
 	"net"
 	"strings"
@@ -30,19 +31,34 @@ func NewArenaManager(k8sMgr K8sManager, vpnMgr VPNManager) ArenaManager {
 }
 
 func pubKeyToNamespace(pubKey string) string {
-	b64 := base64.RawURLEncoding.EncodeToString([]byte(pubKey))
-	b64 = strings.ToLower(b64)
-	b64 = strings.ReplaceAll(b64, "_", "-")
-	return "arena-" + b64
+	// Hash the public key for consistent length and collision resistance
+	hash := sha256.Sum256([]byte(pubKey))
+	
+	// Use base32 encoding (URL-safe by default, no padding issues)
+	b32 := base32.StdEncoding.EncodeToString(hash[:15]) // 24 chars
+	b32 = strings.ToLower(strings.ReplaceAll(b32, "=", "")) // Remove padding, lowercase
+	
+	// Truncate to fit K8s namespace limit (63 characters total)
+	maxLength := 63 - len("arena-") // Reserve space for "arena-" prefix
+	if len(b32) > maxLength {
+		b32 = b32[:maxLength]
+	}
+	
+	return "arena-" + b32
 }
 
 // CreateArena provisions a new arena for the user: creates K8s resources and a VPN peer.
 func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error) {
 	ns := pubKeyToNamespace(publicKey)
+	// Create URL-safe public key hash for labels
+	hash := sha256.Sum256([]byte(publicKey))
+	keyHash := base32.StdEncoding.EncodeToString(hash[:8]) // 16 chars, no padding
+	keyHash = strings.ToLower(strings.ReplaceAll(keyHash, "=", ""))
+	
 	labels := map[string]string{
-		"arena/publickey":  publicKey,
+		"arena/publickey":  keyHash,
 		"arena/challenge":  challengeName,
-		"arena/created-at": time.Now().UTC().Format(time.RFC3339),
+		"arena/created-at": time.Now().UTC().Format("20060102T150405Z"),
 	}
 
 	// 1. Validate the challenge spec before parsing/creating resources

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -157,6 +158,15 @@ func (k *k8sManager) DeleteServices(namespace string, serviceNames []string) err
 }
 
 func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string) error {
+	// Parse the VPN IP to ensure it's a valid CIDR
+	_, ipnet, err := net.ParseCIDR(vpnIP)
+	if err != nil {
+		return fmt.Errorf("invalid VPN IP CIDR: %s", vpnIP)
+	}
+	
+	// Use the parsed CIDR string
+	cidr := ipnet.String()
+	
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "arena-vpn-policy",
@@ -170,7 +180,7 @@ func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string) error {
 					From: []networkingv1.NetworkPolicyPeer{
 						{
 							IPBlock: &networkingv1.IPBlock{
-								CIDR: vpnIP + "/32",
+								CIDR: cidr,
 							},
 						},
 					},
@@ -181,7 +191,7 @@ func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string) error {
 					To: []networkingv1.NetworkPolicyPeer{
 						{
 							IPBlock: &networkingv1.IPBlock{
-								CIDR: vpnIP + "/32",
+								CIDR: cidr,
 							},
 						},
 					},
@@ -189,7 +199,7 @@ func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string) error {
 			},
 		},
 	}
-	_, err := k.clientset.NetworkingV1().NetworkPolicies(namespace).Create(context.Background(), policy, metav1.CreateOptions{})
+	_, err = k.clientset.NetworkingV1().NetworkPolicies(namespace).Create(context.Background(), policy, metav1.CreateOptions{})
 	return err
 }
 

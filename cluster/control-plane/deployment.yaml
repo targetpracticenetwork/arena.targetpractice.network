@@ -13,6 +13,7 @@ spec:
       labels:
         app: arenaservice
     spec:
+      serviceAccountName: arenaservice
       containers:
         - name: arenaservice
           image: docker.io/library/alpine:latest
@@ -31,6 +32,11 @@ spec:
             - containerPort: 11820
               name: wireguard
               protocol: UDP
+          env:
+            - name: ARENA_INSECURE_DISABLE_MTLS
+              value: "true"
+            - name: WIREGUARD_INTERFACE
+              value: "wg0"
           securityContext:
             privileged: true
             capabilities:

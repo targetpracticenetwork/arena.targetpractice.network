@@ -79,3 +79,4 @@ coverage.html
 # Air live reload (if you use it)
 tmp/ arenaclient
 arenaserver
+arenaclient
