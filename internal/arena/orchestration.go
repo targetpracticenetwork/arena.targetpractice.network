@@ -167,7 +167,7 @@ func (a *arenaManager) DestroyArena(publicKey string) error {
 		log.Printf("❌ Namespace deletion failed: %v", err)
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
-	log.Printf("✅ Namespace deleted: %s")
+	log.Printf("✅ Namespace deleted: %s", ns)
 	
 	log.Printf("🎉 Arena destruction completed - Namespace: %s", ns)
 	return nil
