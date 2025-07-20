@@ -1,8 +1,10 @@
 package arena
 
 import (
+	"fmt"
 	"log"
 	"net"
+	"os"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -20,17 +22,73 @@ type VPNManager interface {
 	RemovePeer(pubKey string) error
 	GetPeerStatus(pubKey string) (*PeerStatus, error)
 	CheckDevice() error
+	GetServerPublicKey() (string, error)
+	GetServerEndpoint() (string, error)
+	GetDefaultAllowedIPs() []string
 }
 
 // WGManager is a concrete implementation of VPNManager using wgctrl.
 type WGManager struct {
-	InterfaceName string
+	InterfaceName     string
+	ServerPublicKey   string
+	ServerEndpoint    string
+	DefaultAllowedIPs []string
+}
+
+// NewWGManager creates a new WGManager and initializes server configuration at startup.
+func NewWGManager(interfaceName string) (*WGManager, error) {
+	mgr := &WGManager{
+		InterfaceName:     interfaceName,
+		DefaultAllowedIPs: []string{"10.0.0.0/24"}, // Default VPN subnet
+	}
+
+	// Initialize server configuration at startup
+	if err := mgr.initializeServerConfig(); err != nil {
+		return nil, fmt.Errorf("failed to initialize WireGuard server config: %w", err)
+	}
+
+	return mgr, nil
+}
+
+// initializeServerConfig retrieves and caches server configuration at startup.
+func (w *WGManager) initializeServerConfig() error {
+	client, err := wgctrl.New()
+	if err != nil {
+		return fmt.Errorf("failed to create WireGuard client: %w", err)
+	}
+	defer client.Close()
+
+	device, err := client.Device(w.InterfaceName)
+	if err != nil {
+		return fmt.Errorf("failed to get WireGuard device %s: %w", w.InterfaceName, err)
+	}
+
+	// Cache server public key
+	w.ServerPublicKey = device.PublicKey.String()
+
+	// Get server hostname/IP from environment variable
+	serverHost := os.Getenv("WIREGUARD_SERVER_HOST")
+	if serverHost == "" {
+		serverHost = "localhost" // fallback for development
+	}
+
+	// Cache server endpoint with port
+	port := 11820 // default port
+	if device.ListenPort != 0 {
+		port = int(device.ListenPort)
+	}
+	w.ServerEndpoint = fmt.Sprintf("%s:%d", serverHost, port)
+
+	log.Printf("🔧 WireGuard server config initialized - Public Key: %s, Endpoint: %s",
+		w.ServerPublicKey, w.ServerEndpoint)
+
+	return nil
 }
 
 // CreatePeer adds a peer to the WireGuard interface using the provided public key and allowed IPs.
 func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConfig, error) {
 	log.Printf("🔐 Creating WireGuard peer - Interface: %s, Public Key: %s", w.InterfaceName, pubKey)
-	
+
 	client, err := wgctrl.New()
 	if err != nil {
 		log.Printf("❌ Failed to create WireGuard client: %v", err)
@@ -77,7 +135,7 @@ func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConf
 // RemovePeer removes a peer from the WireGuard interface using the provided public key.
 func (w *WGManager) RemovePeer(pubKey string) error {
 	log.Printf("🗑️ Removing WireGuard peer - Interface: %s, Public Key: %s", w.InterfaceName, pubKey)
-	
+
 	client, err := wgctrl.New()
 	if err != nil {
 		log.Printf("❌ Failed to create WireGuard client: %v", err)
@@ -165,4 +223,19 @@ func (w *WGManager) CheckDevice() error {
 
 	_, err = client.Device(w.InterfaceName)
 	return err
+}
+
+// GetServerPublicKey returns the server's WireGuard public key (cached at startup).
+func (w *WGManager) GetServerPublicKey() (string, error) {
+	return w.ServerPublicKey, nil
+}
+
+// GetServerEndpoint returns the server's endpoint for client configuration (cached at startup).
+func (w *WGManager) GetServerEndpoint() (string, error) {
+	return w.ServerEndpoint, nil
+}
+
+// GetDefaultAllowedIPs returns the default allowed IPs for client routing (cached at startup).
+func (w *WGManager) GetDefaultAllowedIPs() []string {
+	return w.DefaultAllowedIPs
 }

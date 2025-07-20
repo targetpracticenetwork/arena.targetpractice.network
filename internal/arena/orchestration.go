@@ -34,17 +34,17 @@ func NewArenaManager(k8sMgr K8sManager, vpnMgr VPNManager) ArenaManager {
 func pubKeyToNamespace(pubKey string) string {
 	// Hash the public key for consistent length and collision resistance
 	hash := sha256.Sum256([]byte(pubKey))
-	
+
 	// Use base32 encoding (URL-safe by default, no padding issues)
-	b32 := base32.StdEncoding.EncodeToString(hash[:15]) // 24 chars
+	b32 := base32.StdEncoding.EncodeToString(hash[:15])     // 24 chars
 	b32 = strings.ToLower(strings.ReplaceAll(b32, "=", "")) // Remove padding, lowercase
-	
+
 	// Truncate to fit K8s namespace limit (63 characters total)
 	maxLength := 63 - len("arena-") // Reserve space for "arena-" prefix
 	if len(b32) > maxLength {
 		b32 = b32[:maxLength]
 	}
-	
+
 	return "arena-" + b32
 }
 
@@ -52,12 +52,12 @@ func pubKeyToNamespace(pubKey string) string {
 func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error) {
 	ns := pubKeyToNamespace(publicKey)
 	log.Printf("🏗️ Creating arena - Namespace: %s, Challenge: %s", ns, challengeName)
-	
+
 	// Create URL-safe public key hash for labels
 	hash := sha256.Sum256([]byte(publicKey))
 	keyHash := base32.StdEncoding.EncodeToString(hash[:8]) // 16 chars, no padding
 	keyHash = strings.ToLower(strings.ReplaceAll(keyHash, "=", ""))
-	
+
 	labels := map[string]string{
 		"arena/publickey":  keyHash,
 		"arena/challenge":  challengeName,
@@ -125,6 +125,24 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	}
 	log.Printf("✅ VPN peer created - Allowed IP: %s", peerCfg.AllowedIP)
 
+	// 7. Get server WireGuard information for client configuration
+	log.Printf("🔍 Retrieving server WireGuard configuration...")
+	serverPublicKey, err := a.vpn.GetServerPublicKey()
+	if err != nil {
+		log.Printf("❌ Failed to get server public key: %v", err)
+		return nil, fmt.Errorf("failed to get server public key: %w", err)
+	}
+
+	serverEndpoint, err := a.vpn.GetServerEndpoint()
+	if err != nil {
+		log.Printf("❌ Failed to get server endpoint: %v", err)
+		return nil, fmt.Errorf("failed to get server endpoint: %w", err)
+	}
+
+	allowedIPsForRouting := a.vpn.GetDefaultAllowedIPs()
+	log.Printf("✅ Server WireGuard info retrieved - Public Key: %s, Endpoint: %s",
+		serverPublicKey, serverEndpoint)
+
 	// Helper to convert []*ServiceEndpoint to []*ServiceEndpoint (proto)
 	convertServiceEndpoints := func(src []*ServiceEndpoint) []*ServiceEndpoint {
 		out := make([]*ServiceEndpoint, len(src))
@@ -139,13 +157,16 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	}
 
 	config := &ArenaConfig{
-		PublicKey:   peerCfg.PublicKey,
-		AllowedIp:   peerCfg.AllowedIP,
-		ChallengeId: challengeName,
-		Namespace:   ns,
-		Endpoints:   convertServiceEndpoints(svcEndpoints),
+		PublicKey:            peerCfg.PublicKey,
+		AllowedIp:            peerCfg.AllowedIP,
+		ChallengeId:          challengeName,
+		Namespace:            ns,
+		Endpoints:            convertServiceEndpoints(svcEndpoints),
+		ServerPublicKey:      serverPublicKey,
+		ServerEndpoint:       serverEndpoint,
+		AllowedIpsForRouting: allowedIPsForRouting,
 	}
-	
+
 	log.Printf("🎉 Arena creation completed - Namespace: %s, Endpoints: %d", ns, len(config.Endpoints))
 	return config, nil
 }
@@ -154,7 +175,7 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 func (a *arenaManager) DestroyArena(publicKey string) error {
 	ns := pubKeyToNamespace(publicKey)
 	log.Printf("🗑️ Destroying arena - Namespace: %s", ns)
-	
+
 	log.Printf("🔐 Removing VPN peer for public key: %s", publicKey)
 	if err := a.vpn.RemovePeer(publicKey); err != nil {
 		log.Printf("❌ VPN peer removal failed for public key %s: %v", publicKey, err)
@@ -168,7 +189,7 @@ func (a *arenaManager) DestroyArena(publicKey string) error {
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
 	log.Printf("✅ Namespace deleted: %s", ns)
-	
+
 	log.Printf("🎉 Arena destruction completed - Namespace: %s", ns)
 	return nil
 }
@@ -194,7 +215,7 @@ func (a *arenaManager) GetArenaStatus(publicKey string) (*ArenaStatus, error) {
 		log.Printf("❌ Kubernetes namespace status failed: %v", err)
 		return nil, fmt.Errorf("failed to get namespace status: %w", err)
 	}
-	log.Printf("✅ Kubernetes namespace status retrieved - Pods: %d, Services: %d", 
+	log.Printf("✅ Kubernetes namespace status retrieved - Pods: %d, Services: %d",
 		k8sStatus.GetPodCount(), k8sStatus.GetServiceCount())
 
 	// Determine overall health and collect errors
@@ -246,13 +267,13 @@ func (a *arenaManager) GetArenaStatus(publicKey string) (*ArenaStatus, error) {
 		Healthy:   healthy,
 		Errors:    errors,
 	}
-	
+
 	healthStatus := "✅"
 	if !healthy {
 		healthStatus = "❌"
 	}
-	log.Printf("📊 Arena status completed - Namespace: %s, Healthy: %s, Errors: %d", 
+	log.Printf("📊 Arena status completed - Namespace: %s, Healthy: %s, Errors: %d",
 		ns, healthStatus, len(errors))
-	
+
 	return status, nil
 }

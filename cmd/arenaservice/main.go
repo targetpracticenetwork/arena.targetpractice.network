@@ -28,7 +28,10 @@ func main() {
 
 	// Initialize managers
 	k8sManager := arena.NewK8sManager() // dummy implementation
-	vpnManager := &arena.WGManager{InterfaceName: wgInterface}
+	vpnManager, err := arena.NewWGManager(wgInterface)
+	if err != nil {
+		log.Fatalf("Failed to initialize WireGuard manager: %v", err)
+	}
 
 	// Check VPN interface before starting gRPC service
 	if err := vpnManager.CheckDevice(); err != nil {

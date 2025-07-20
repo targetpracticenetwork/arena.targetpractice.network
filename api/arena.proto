@@ -53,6 +53,9 @@ message ArenaConfig {
   string challenge_id = 3;
   string namespace = 4;
   repeated ServiceEndpoint endpoints = 5;
+  string server_public_key = 6;
+  string server_endpoint = 7;
+  repeated string allowed_ips_for_routing = 8;
 }
 
 // Service endpoint details

@@ -69,6 +69,11 @@ type mockVPNManager struct {
 	GetPeerStatusErr error
 	PeerCfg          *PeerConfig
 	PeerStatus       *PeerStatus
+
+	// New fields for server info
+	ServerPublicKey   string
+	ServerEndpoint    string
+	DefaultAllowedIPs []string
 }
 
 func (m *mockVPNManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConfig, error) {
@@ -84,6 +89,24 @@ func (m *mockVPNManager) GetPeerStatus(pubKey string) (*PeerStatus, error) {
 	return m.PeerStatus, m.GetPeerStatusErr
 }
 func (m *mockVPNManager) CheckDevice() error { return nil }
+func (m *mockVPNManager) GetServerPublicKey() (string, error) {
+	if m.ServerPublicKey == "" {
+		return "server-public-key", nil
+	}
+	return m.ServerPublicKey, nil
+}
+func (m *mockVPNManager) GetServerEndpoint() (string, error) {
+	if m.ServerEndpoint == "" {
+		return "arena-dev.targetpractice.network:11820", nil
+	}
+	return m.ServerEndpoint, nil
+}
+func (m *mockVPNManager) GetDefaultAllowedIPs() []string {
+	if m.DefaultAllowedIPs == nil {
+		return []string{"10.0.0.0/24"}
+	}
+	return m.DefaultAllowedIPs
+}
 
 func TestArenaManager_CreateArena_Success(t *testing.T) {
 	k8s := &mockK8sManager{
@@ -99,6 +122,16 @@ func TestArenaManager_CreateArena_Success(t *testing.T) {
 	}
 	if cfg.PublicKey != "pk" || cfg.AllowedIp != "10.0.0.2/32" {
 		t.Errorf("unexpected config: %+v", &cfg)
+	}
+	// Verify new WireGuard server information fields
+	if cfg.ServerPublicKey != "server-public-key" {
+		t.Errorf("expected server public key 'server-public-key', got '%s'", cfg.ServerPublicKey)
+	}
+	if cfg.ServerEndpoint != "arena-dev.targetpractice.network:11820" {
+		t.Errorf("expected server endpoint 'arena-dev.targetpractice.network:11820', got '%s'", cfg.ServerEndpoint)
+	}
+	if len(cfg.AllowedIpsForRouting) != 1 || cfg.AllowedIpsForRouting[0] != "10.0.0.0/24" {
+		t.Errorf("expected allowed IPs for routing ['10.0.0.0/24'], got %v", cfg.AllowedIpsForRouting)
 	}
 	if !k8s.CreateNamespaceCalled || !k8s.ValidateSpecCalled || !k8s.CreateResourcesFromSpecCalled || !k8s.ApplyNetworkPolicyCalled {
 		t.Error("expected all k8s methods to be called")
@@ -167,8 +200,10 @@ func TestArenaManager_GetArenaStatus_Success(t *testing.T) {
 	if status.GetK8SStatus() == nil {
 		t.Error("expected k8s_status in arena status")
 	}
-	if status.GetNamespace() != "arena-cgs" {
-		t.Errorf("expected namespace arena-cgs, got %v", status.GetNamespace())
+	// The namespace is computed from the public key hash
+	expectedNamespace := "arena-5myqfjwllbtwlua7vuzeki7m" // pubKeyToNamespace("pk")
+	if status.GetNamespace() != expectedNamespace {
+		t.Errorf("expected namespace %s, got %v", expectedNamespace, status.GetNamespace())
 	}
 	if status.GetPublicKey() != "pk" {
 		t.Errorf("expected public_key 'pk', got %v", status.GetPublicKey())

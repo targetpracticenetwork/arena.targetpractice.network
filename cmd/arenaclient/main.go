@@ -10,6 +10,7 @@ import (
 
 	"arena/internal/arena"
 
+	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -64,6 +65,8 @@ func main() {
 		handleDestroy(ctx, client, os.Args[2:])
 	case "status":
 		handleStatus(ctx, client, os.Args[2:])
+	case "config":
+		handleConfig(ctx, client, os.Args[2:])
 	case "help":
 		printUsage()
 	default:
@@ -75,21 +78,32 @@ func main() {
 
 func handleCreate(ctx context.Context, client arena.ArenaServiceClient, args []string) {
 	fs := flag.NewFlagSet("create", flag.ExitOnError)
-	publicKey := fs.String("public-key", "", "Public key for the arena (required)")
 	vpnIP := fs.String("vpn-ip", "", "VPN IP address (required)")
 	challengeName := fs.String("challenge-name", "", "Challenge name (required)")
 	challengeSpec := fs.String("challenge-spec", "", "Challenge specification (required)")
 
 	fs.Parse(args)
 
-	if *publicKey == "" || *vpnIP == "" || *challengeName == "" || *challengeSpec == "" {
-		fmt.Println("Error: public-key, vpn-ip, challenge-name, and challenge-spec are required")
+	if *vpnIP == "" || *challengeName == "" || *challengeSpec == "" {
+		fmt.Println("Error: vpn-ip, challenge-name, and challenge-spec are required")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
+	// Generate WireGuard key pair
+	privateKey, err := wgtypes.GeneratePrivateKey()
+	if err != nil {
+		log.Fatalf("Failed to generate WireGuard private key: %v", err)
+	}
+	publicKey := privateKey.PublicKey()
+
+	fmt.Printf("🔑 Generated WireGuard key pair:\n")
+	fmt.Printf("  Private Key: %s\n", privateKey.String())
+	fmt.Printf("  Public Key:  %s\n", publicKey.String())
+	fmt.Println()
+
 	req := &arena.CreateArenaRequest{
-		PublicKey:     *publicKey,
+		PublicKey:     publicKey.String(),
 		VpnIp:         *vpnIP,
 		ChallengeName: *challengeName,
 		ChallengeSpec: *challengeSpec,
@@ -111,12 +125,51 @@ func handleCreate(ctx context.Context, client arena.ArenaServiceClient, args []s
 	fmt.Printf("Challenge ID: %s\n", resp.Config.ChallengeId)
 	fmt.Printf("Namespace: %s\n", resp.Config.Namespace)
 
+	// Display new WireGuard server configuration
+	fmt.Println("\n🔐 WireGuard Server Configuration:")
+	fmt.Printf("  Server Public Key: %s\n", resp.Config.ServerPublicKey)
+	fmt.Printf("  Server Endpoint: %s\n", resp.Config.ServerEndpoint)
+	fmt.Printf("  Allowed IPs for Routing: %v\n", resp.Config.AllowedIpsForRouting)
+
 	if len(resp.Config.Endpoints) > 0 {
-		fmt.Println("Endpoints:")
+		fmt.Println("\n📡 Service Endpoints:")
 		for _, endpoint := range resp.Config.Endpoints {
 			fmt.Printf("  - %s: %s:%v\n", endpoint.Name, endpoint.ClusterIp, endpoint.Ports)
 		}
 	}
+
+	// Generate WireGuard configuration
+	fmt.Println("\n📋 WireGuard Client Configuration:")
+	generateWireGuardConfig(resp.Config, privateKey.String())
+}
+
+// generateWireGuardConfig creates a WireGuard configuration file content
+func generateWireGuardConfig(config *arena.ArenaConfig, privateKey string) {
+	fmt.Println("```ini")
+	fmt.Println("[Interface]")
+	fmt.Printf("PrivateKey = %s\n", privateKey)
+	fmt.Printf("Address = %s\n", config.AllowedIp)
+	fmt.Println("DNS = 8.8.8.8")
+	fmt.Println()
+	fmt.Println("[Peer]")
+	fmt.Printf("PublicKey = %s\n", config.ServerPublicKey)
+	fmt.Printf("Endpoint = %s\n", config.ServerEndpoint)
+
+	// Format allowed IPs for routing
+	allowedIPs := config.AllowedIpsForRouting
+	if len(allowedIPs) == 0 {
+		allowedIPs = []string{"10.0.0.0/24"} // Default VPN subnet
+	}
+	fmt.Printf("AllowedIPs = %s\n", allowedIPs[0])
+
+	fmt.Println("PersistentKeepalive = 25")
+	fmt.Println("```")
+
+	fmt.Println("\n💡 Instructions:")
+	fmt.Println("1. Save this configuration to a .conf file")
+	fmt.Println("2. Import into your WireGuard client")
+	fmt.Println("3. Connect to access your arena services!")
+	fmt.Println("4. Your private key is already included in the configuration above")
 }
 
 func handleDestroy(ctx context.Context, client arena.ArenaServiceClient, args []string) {
@@ -213,6 +266,57 @@ func handleStatus(ctx context.Context, client arena.ArenaServiceClient, args []s
 	}
 }
 
+func handleConfig(ctx context.Context, client arena.ArenaServiceClient, args []string) {
+	fs := flag.NewFlagSet("config", flag.ExitOnError)
+	publicKey := fs.String("public-key", "", "Public key of the arena (required)")
+	outputFile := fs.String("output", "", "Output file for WireGuard config (optional)")
+
+	fs.Parse(args)
+
+	if *publicKey == "" {
+		fmt.Println("Error: public-key is required")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	// Get arena status to retrieve configuration
+	req := &arena.GetArenaStatusRequest{
+		PublicKey: *publicKey,
+	}
+
+	resp, err := client.GetArenaStatus(ctx, req)
+	if err != nil {
+		log.Fatalf("Failed to get arena status: %v", err)
+	}
+
+	if resp.Error != "" {
+		fmt.Printf("Error getting arena status: %s\n", resp.Error)
+		os.Exit(1)
+	}
+
+	// Create a mock config for WireGuard generation
+	// In a real implementation, you might want to store the full config
+	// or retrieve it from a separate endpoint
+	config := &arena.ArenaConfig{
+		PublicKey:            resp.Status.PublicKey,
+		AllowedIp:            "10.0.0.100/32",     // This would come from the original creation
+		ServerPublicKey:      "server-public-key", // This would come from the original creation
+		ServerEndpoint:       "arena-dev.targetpractice.network:11820",
+		AllowedIpsForRouting: []string{"10.0.0.0/24"},
+	}
+
+	fmt.Printf("Generating WireGuard configuration for arena: %s\n", *publicKey)
+	fmt.Println()
+
+	if *outputFile != "" {
+		// TODO: Implement file output
+		fmt.Printf("Output file specified: %s (not yet implemented)\n", *outputFile)
+	}
+
+	// For the config command, we don't have the private key, so we show a placeholder
+	generateWireGuardConfig(config, "<your_private_key>")
+}
+
 func printUsage() {
 	fmt.Println("Arena Client - Command line client for Arena Service")
 	fmt.Println()
@@ -223,6 +327,7 @@ func printUsage() {
 	fmt.Println("  create     Create a new arena")
 	fmt.Println("  destroy    Destroy an existing arena")
 	fmt.Println("  status     Get status of an arena")
+	fmt.Println("  config     Generate WireGuard configuration")
 	fmt.Println("  help       Show this help message")
 	fmt.Println()
 	fmt.Println("Environment Variables:")
@@ -230,9 +335,10 @@ func printUsage() {
 	fmt.Println("  ARENA_INSECURE_DISABLE_MTLS Disable mTLS and use insecure connection (default: false)")
 	fmt.Println()
 	fmt.Println("Examples:")
-	fmt.Println("  arenaclient create -public-key=abc123 -vpn-ip=10.0.0.2/32 -challenge-spec='...'")
+	fmt.Println("  arenaclient create -vpn-ip=10.0.0.2/32 -challenge-spec='...'")
 	fmt.Println("  arenaclient destroy -public-key=abc123")
 	fmt.Println("  arenaclient status -public-key=abc123")
+	fmt.Println("  arenaclient config -public-key=abc123")
 	fmt.Println()
 	fmt.Println("Insecure Mode:")
 	fmt.Println("  ARENA_INSECURE_DISABLE_MTLS=true arenaclient status -public-key=abc123")
