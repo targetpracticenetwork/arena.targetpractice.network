@@ -100,21 +100,55 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 		})
 	}
 
-	// 4. Apply NetworkPolicy to allow ingress only from the user's VPN IP
+	// 4. Apply NetworkPolicy to allow ingress from VPN IP and specific service IPs
 	log.Printf("🛡️ Applying network policy for VPN IP: %s", vpnIP)
-	if err := a.k8s.ApplyNetworkPolicy(ns, vpnIP); err != nil {
+
+	// Build service IPs list for network policy
+	var serviceIPs []string
+	log.Printf("🔍 Building service IPs list from %d endpoints", len(svcEndpoints))
+	for _, endpoint := range svcEndpoints {
+		log.Printf("🔍 Processing endpoint: %s -> %s", endpoint.Name, endpoint.ClusterIp)
+		if endpoint.ClusterIp != "" {
+			serviceIP := endpoint.ClusterIp + "/32"
+			serviceIPs = append(serviceIPs, serviceIP)
+			log.Printf("🔧 Added service IP to network policy: %s", serviceIP)
+		} else {
+			log.Printf("⚠️ Endpoint %s has empty cluster IP", endpoint.Name)
+		}
+	}
+	log.Printf("🔧 Total service IPs for network policy: %d", len(serviceIPs))
+
+	if err := a.k8s.ApplyNetworkPolicy(ns, vpnIP, serviceIPs); err != nil {
 		log.Printf("❌ Network policy application failed: %v", err)
 		return nil, fmt.Errorf("failed to apply network policy: %w", err)
 	}
-	log.Printf("✅ Network policy applied")
+	log.Printf("✅ Network policy applied with %d service IPs", len(serviceIPs))
 
-	// 5. Only allow the user's VPN IP as AllowedIP for the peer
+	// 5. Allow the user's VPN IP and specific service IPs as AllowedIPs for the peer
 	_, ipnet, err := net.ParseCIDR(vpnIP)
 	if err != nil {
 		log.Printf("❌ Invalid VPN IP format: %s", vpnIP)
 		return nil, fmt.Errorf("invalid VPN IP: %s", vpnIP)
 	}
+
+	// Build allowed IPs list: VPN IP + specific service IPs
 	allowedIPNets := []net.IPNet{*ipnet}
+
+	// Add specific service IPs as /32 CIDRs
+	for _, endpoint := range svcEndpoints {
+		if endpoint.ClusterIp != "" {
+			serviceIP := endpoint.ClusterIp + "/32"
+			_, serviceIPNet, err := net.ParseCIDR(serviceIP)
+			if err != nil {
+				log.Printf("❌ Invalid service IP format: %s", serviceIP)
+				return nil, fmt.Errorf("invalid service IP: %s", serviceIP)
+			}
+			allowedIPNets = append(allowedIPNets, *serviceIPNet)
+			log.Printf("🔧 Adding service IP to allowed IPs: %s", serviceIP)
+		}
+	}
+
+	log.Printf("🔧 Configuring peer with allowed IPs: VPN=%s, Services=%d", ipnet.String(), len(allowedIPNets)-1)
 
 	// 6. Create VPN peer for the user
 	log.Printf("🔐 Creating VPN peer for public key: %s", publicKey)
@@ -139,7 +173,18 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 		return nil, fmt.Errorf("failed to get server endpoint: %w", err)
 	}
 
-	allowedIPsForRouting := a.vpn.GetDefaultAllowedIPs()
+	// Build allowed IPs for routing: VPN subnet + specific service IPs
+	allowedIPsForRouting := []string{"10.0.0.0/24"} // Default VPN subnet
+
+	// Add specific service IPs as /32 CIDRs
+	for _, endpoint := range svcEndpoints {
+		if endpoint.ClusterIp != "" {
+			serviceIP := endpoint.ClusterIp + "/32"
+			allowedIPsForRouting = append(allowedIPsForRouting, serviceIP)
+			log.Printf("🔧 Adding service IP to routing: %s", serviceIP)
+		}
+	}
+
 	log.Printf("✅ Server WireGuard info retrieved - Public Key: %s, Endpoint: %s",
 		serverPublicKey, serverEndpoint)
 

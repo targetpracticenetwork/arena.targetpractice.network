@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"arena/internal/arena"
@@ -160,7 +161,10 @@ func generateWireGuardConfig(config *arena.ArenaConfig, privateKey string) {
 	if len(allowedIPs) == 0 {
 		allowedIPs = []string{"10.0.0.0/24"} // Default VPN subnet
 	}
-	fmt.Printf("AllowedIPs = %s\n", allowedIPs[0])
+
+	// Join multiple allowed IPs with commas
+	allowedIPsStr := strings.Join(allowedIPs, ", ")
+	fmt.Printf("AllowedIPs = %s\n", allowedIPsStr)
 
 	fmt.Println("PersistentKeepalive = 25")
 	fmt.Println("```")

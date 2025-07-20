@@ -71,7 +71,7 @@ type K8sManager interface {
 	DeletePods(namespace string, podNames []string) error
 	CreateServices(namespace string, services []*v1.Service) error
 	DeleteServices(namespace string, serviceNames []string) error
-	ApplyNetworkPolicy(namespace string, vpnIP string) error
+	ApplyNetworkPolicy(namespace string, vpnIP string, serviceIPs []string) error
 	ApplyResourceQuota(namespace string, quota *ResourceUsage) error
 	GetNamespaceStatus(name string) (*NamespaceStatus, error)
 	ValidateSpec(challengeSpec string) error
@@ -170,16 +170,46 @@ func (k *k8sManager) DeleteServices(namespace string, serviceNames []string) err
 	return nil
 }
 
-func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string) error {
+func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string, serviceIPs []string) error {
 	// Parse the VPN IP to ensure it's a valid CIDR
 	_, ipnet, err := net.ParseCIDR(vpnIP)
 	if err != nil {
 		return fmt.Errorf("invalid VPN IP CIDR: %s", vpnIP)
 	}
-	
+
 	// Use the parsed CIDR string
-	cidr := ipnet.String()
-	
+	vpnCidr := ipnet.String()
+	clusterCidr := "10.42.0.0/24" // Cluster pod network
+
+	// Build ingress and egress rules with specific service IPs
+	var ingressPeers []networkingv1.NetworkPolicyPeer
+	var egressPeers []networkingv1.NetworkPolicyPeer
+
+	// Add VPN and cluster CIDRs
+	ingressPeers = append(ingressPeers, networkingv1.NetworkPolicyPeer{
+		IPBlock: &networkingv1.IPBlock{CIDR: vpnCidr},
+	})
+	ingressPeers = append(ingressPeers, networkingv1.NetworkPolicyPeer{
+		IPBlock: &networkingv1.IPBlock{CIDR: clusterCidr},
+	})
+
+	egressPeers = append(egressPeers, networkingv1.NetworkPolicyPeer{
+		IPBlock: &networkingv1.IPBlock{CIDR: vpnCidr},
+	})
+	egressPeers = append(egressPeers, networkingv1.NetworkPolicyPeer{
+		IPBlock: &networkingv1.IPBlock{CIDR: clusterCidr},
+	})
+
+	// Add specific service IPs
+	for _, serviceIP := range serviceIPs {
+		ingressPeers = append(ingressPeers, networkingv1.NetworkPolicyPeer{
+			IPBlock: &networkingv1.IPBlock{CIDR: serviceIP},
+		})
+		egressPeers = append(egressPeers, networkingv1.NetworkPolicyPeer{
+			IPBlock: &networkingv1.IPBlock{CIDR: serviceIP},
+		})
+	}
+
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "arena-vpn-policy",
@@ -190,24 +220,12 @@ func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string) error {
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{
 				{
-					From: []networkingv1.NetworkPolicyPeer{
-						{
-							IPBlock: &networkingv1.IPBlock{
-								CIDR: cidr,
-							},
-						},
-					},
+					From: ingressPeers,
 				},
 			},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{
-					To: []networkingv1.NetworkPolicyPeer{
-						{
-							IPBlock: &networkingv1.IPBlock{
-								CIDR: cidr,
-							},
-						},
-					},
+					To: egressPeers,
 				},
 			},
 		},
@@ -388,7 +406,7 @@ func (k *k8sManager) ValidateSpec(challengeSpec string) error {
 
 func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([]*ServiceEndpoint, error) {
 	log.Printf("🚀 Creating resources from spec in namespace: %s", namespace)
-	
+
 	// Parse the challenge spec
 	var spec ChallengeSpec
 	if err := yaml.Unmarshal([]byte(challengeSpec), &spec); err != nil {
@@ -518,8 +536,9 @@ func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec) (*v1.Pod,
 
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   spec.Name,
-			Labels: labels,
+			Name:      spec.Name,
+			Namespace: namespace,
+			Labels:    labels,
 		},
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
@@ -569,8 +588,9 @@ func (k *k8sManager) createServiceFromSpec(namespace string, spec ServiceSpec) (
 
 	svc := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   spec.Name,
-			Labels: labels,
+			Name:      spec.Name,
+			Namespace: namespace,
+			Labels:    labels,
 		},
 		Spec: v1.ServiceSpec{
 			Type:     v1.ServiceType(serviceType),

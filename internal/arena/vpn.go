@@ -39,7 +39,7 @@ type WGManager struct {
 func NewWGManager(interfaceName string) (*WGManager, error) {
 	mgr := &WGManager{
 		InterfaceName:     interfaceName,
-		DefaultAllowedIPs: []string{"10.0.0.0/24"}, // Default VPN subnet
+		DefaultAllowedIPs: []string{"10.0.0.0/24", "10.43.0.0/16"}, // VPN subnet + cluster services
 	}
 
 	// Initialize server configuration at startup

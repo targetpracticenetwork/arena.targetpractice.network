@@ -38,7 +38,7 @@ func (m *mockK8sManager) CreatePods(namespace string, pods []*v1.Pod) error     
 func (m *mockK8sManager) DeletePods(namespace string, podNames []string) error          { return nil }
 func (m *mockK8sManager) CreateServices(namespace string, services []*v1.Service) error { return nil }
 func (m *mockK8sManager) DeleteServices(namespace string, serviceNames []string) error  { return nil }
-func (m *mockK8sManager) ApplyNetworkPolicy(namespace string, vpnIP string) error {
+func (m *mockK8sManager) ApplyNetworkPolicy(namespace string, vpnIP string, serviceIPs []string) error {
 	m.ApplyNetworkPolicyCalled = true
 	return m.ApplyNetworkPolicyErr
 }
@@ -130,8 +130,22 @@ func TestArenaManager_CreateArena_Success(t *testing.T) {
 	if cfg.ServerEndpoint != "arena-dev.targetpractice.network:11820" {
 		t.Errorf("expected server endpoint 'arena-dev.targetpractice.network:11820', got '%s'", cfg.ServerEndpoint)
 	}
-	if len(cfg.AllowedIpsForRouting) != 1 || cfg.AllowedIpsForRouting[0] != "10.0.0.0/24" {
-		t.Errorf("expected allowed IPs for routing ['10.0.0.0/24'], got %v", cfg.AllowedIpsForRouting)
+	// Check that AllowedIpsForRouting contains VPN subnet and service IP
+	expectedIPs := []string{"10.0.0.0/24", "10.0.0.1/32"}
+	if len(cfg.AllowedIpsForRouting) != len(expectedIPs) {
+		t.Errorf("expected %d allowed IPs for routing, got %d: %v", len(expectedIPs), len(cfg.AllowedIpsForRouting), cfg.AllowedIpsForRouting)
+	}
+	for _, expectedIP := range expectedIPs {
+		found := false
+		for _, actualIP := range cfg.AllowedIpsForRouting {
+			if actualIP == expectedIP {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected allowed IPs for routing to contain '%s', got %v", expectedIP, cfg.AllowedIpsForRouting)
+		}
 	}
 	if !k8s.CreateNamespaceCalled || !k8s.ValidateSpecCalled || !k8s.CreateResourcesFromSpecCalled || !k8s.ApplyNetworkPolicyCalled {
 		t.Error("expected all k8s methods to be called")
