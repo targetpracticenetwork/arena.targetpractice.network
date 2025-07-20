@@ -76,14 +76,20 @@ type K8sManager interface {
 	GetNamespaceStatus(name string) (*NamespaceStatus, error)
 	ValidateSpec(challengeSpec string) error
 	CreateResourcesFromSpec(namespace, challengeSpec string) ([]*ServiceEndpoint, error)
+
+	// CIDR configuration methods
+	GetClusterCIDR() string
+	GetServiceCIDR() string
 }
 
 // k8sManager is a real implementation of the K8sManager interface.
 type k8sManager struct {
-	clientset *k8sclient.Clientset
+	clientset   *k8sclient.Clientset
+	clusterCIDR string // Cluster pod network CIDR
+	serviceCIDR string // Kubernetes service network CIDR
 }
 
-func NewK8sManager() K8sManager {
+func NewK8sManager(clusterCIDR, serviceCIDR string) K8sManager {
 	// Try in-cluster config first, then fall back to kubeconfig
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -99,7 +105,21 @@ func NewK8sManager() K8sManager {
 		log.Fatalf("Failed to create clientset: %v", err)
 	}
 
-	return &k8sManager{clientset: clientset}
+	return &k8sManager{
+		clientset:   clientset,
+		clusterCIDR: clusterCIDR,
+		serviceCIDR: serviceCIDR,
+	}
+}
+
+// GetClusterCIDR returns the cluster pod network CIDR.
+func (k *k8sManager) GetClusterCIDR() string {
+	return k.clusterCIDR
+}
+
+// GetServiceCIDR returns the Kubernetes service network CIDR.
+func (k *k8sManager) GetServiceCIDR() string {
+	return k.serviceCIDR
 }
 
 func (k *k8sManager) CreateNamespace(name string, labels map[string]string) error {
@@ -179,7 +199,7 @@ func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string, serviceI
 
 	// Use the parsed CIDR string
 	vpnCidr := ipnet.String()
-	clusterCidr := "10.42.0.0/24" // Cluster pod network
+	clusterCidr := k.clusterCIDR // Use configurable cluster CIDR
 
 	// Build ingress and egress rules with specific service IPs
 	var ingressPeers []networkingv1.NetworkPolicyPeer

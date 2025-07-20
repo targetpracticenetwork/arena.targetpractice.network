@@ -58,6 +58,12 @@ func (m *mockK8sManager) CreateResourcesFromSpec(namespace, challengeSpec string
 	m.CreateResourcesFromSpecCalled = true
 	return m.Resources, m.CreateResourcesFromSpecErr
 }
+func (m *mockK8sManager) GetClusterCIDR() string {
+	return "10.42.0.0/24"
+}
+func (m *mockK8sManager) GetServiceCIDR() string {
+	return "10.43.0.0/16"
+}
 
 type mockVPNManager struct {
 	CreatePeerCalled    bool
@@ -76,7 +82,7 @@ type mockVPNManager struct {
 	DefaultAllowedIPs []string
 }
 
-func (m *mockVPNManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConfig, error) {
+func (m *mockVPNManager) CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error) {
 	m.CreatePeerCalled = true
 	return m.PeerCfg, m.CreatePeerErr
 }
@@ -106,6 +112,12 @@ func (m *mockVPNManager) GetDefaultAllowedIPs() []string {
 		return []string{"10.0.0.0/24"}
 	}
 	return m.DefaultAllowedIPs
+}
+func (m *mockVPNManager) GetVPNSubnet() string {
+	return "10.0.0.0/24"
+}
+func (m *mockVPNManager) GetServiceCIDR() string {
+	return "10.43.0.0/16"
 }
 
 func TestArenaManager_CreateArena_Success(t *testing.T) {

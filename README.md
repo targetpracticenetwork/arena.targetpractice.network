@@ -33,6 +33,33 @@ arena/
 - **Secure gRPC API:** All management is performed via a secure, authenticated gRPC API.
 - **Self-Contained Connectivity:** Users access challenges only via VPN; the website interacts only with the gRPC API.
 
+## Configuration
+
+### Environment Variables
+
+The ArenaService can be configured using the following environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WIREGUARD_INTERFACE` | `wg0` | WireGuard interface name |
+| `GRPC_LISTEN_ADDR` | `:443` | gRPC server listen address |
+| `ARENA_INSECURE_DISABLE_MTLS` | `false` | Disable mTLS for development/testing |
+| `VPN_SUBNET` | `10.0.0.0/24` | VPN subnet CIDR for user IP allocation |
+| `CLUSTER_CIDR` | `10.42.0.0/24` | Kubernetes cluster pod network CIDR |
+| `SERVICE_CIDR` | `10.43.0.0/16` | Kubernetes service network CIDR |
+
+### Network Configuration
+
+- **VPN Subnet**: The `VPN_SUBNET` defines the IP range allocated to users for VPN access. Each user gets a `/32` IP from this range.
+- **Cluster CIDR**: The `CLUSTER_CIDR` defines the Kubernetes pod network range. This is used for network policies to allow pod-to-pod communication within the cluster.
+- **Service CIDR**: The `SERVICE_CIDR` defines the Kubernetes service network range. Services get cluster IPs from this range.
+
+### Security Features
+
+- **Server-side IP Filtering**: Users can only access service IPs specifically allocated to their arena, enforced at the WireGuard and iptables level.
+- **Source IP Validation**: WireGuard peers can only use their assigned VPN IP as source.
+- **Destination IP Filtering**: Custom iptables rules prevent users from accessing other users' service endpoints.
+
 ## Cluster Configuration
 All static cluster configuration (namespaces, RBAC, baseline policies, etc.) lives in the `cluster/` directory, making it easy to bootstrap and manage the arena cluster.
 

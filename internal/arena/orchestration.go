@@ -124,17 +124,15 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	}
 	log.Printf("✅ Network policy applied with %d service IPs", len(serviceIPs))
 
-	// 5. Allow the user's VPN IP and specific service IPs as AllowedIPs for the peer
-	_, ipnet, err := net.ParseCIDR(vpnIP)
+	// 5. Parse user's VPN IP for proper peer configuration
+	_, vpnIPNet, err := net.ParseCIDR(vpnIP)
 	if err != nil {
 		log.Printf("❌ Invalid VPN IP format: %s", vpnIP)
 		return nil, fmt.Errorf("invalid VPN IP: %s", vpnIP)
 	}
 
-	// Build allowed IPs list: VPN IP + specific service IPs
-	allowedIPNets := []net.IPNet{*ipnet}
-
-	// Add specific service IPs as /32 CIDRs
+	// 6. Build allowed destination IPs (service IPs only)
+	var allowedDestinations []net.IPNet
 	for _, endpoint := range svcEndpoints {
 		if endpoint.ClusterIp != "" {
 			serviceIP := endpoint.ClusterIp + "/32"
@@ -143,23 +141,23 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 				log.Printf("❌ Invalid service IP format: %s", serviceIP)
 				return nil, fmt.Errorf("invalid service IP: %s", serviceIP)
 			}
-			allowedIPNets = append(allowedIPNets, *serviceIPNet)
-			log.Printf("🔧 Adding service IP to allowed IPs: %s", serviceIP)
+			allowedDestinations = append(allowedDestinations, *serviceIPNet)
+			log.Printf("🔧 Adding service IP to allowed destinations: %s", serviceIP)
 		}
 	}
 
-	log.Printf("🔧 Configuring peer with allowed IPs: VPN=%s, Services=%d", ipnet.String(), len(allowedIPNets)-1)
+	log.Printf("🔧 Configuring peer - VPN IP: %s, Allowed destinations: %d", vpnIPNet.String(), len(allowedDestinations))
 
-	// 6. Create VPN peer for the user
+	// 7. Create VPN peer with proper source/destination separation
 	log.Printf("🔐 Creating VPN peer for public key: %s", publicKey)
-	peerCfg, err := a.vpn.CreatePeer(publicKey, allowedIPNets)
+	peerCfg, err := a.vpn.CreatePeer(publicKey, *vpnIPNet, allowedDestinations)
 	if err != nil {
 		log.Printf("❌ VPN peer creation failed for public key %s: %v", publicKey, err)
 		return nil, fmt.Errorf("failed to create VPN peer: %w", err)
 	}
-	log.Printf("✅ VPN peer created - Allowed IP: %s", peerCfg.AllowedIP)
+	log.Printf("✅ VPN peer created with destination filtering - VPN IP: %s, Destinations: %d", peerCfg.AllowedIP, len(allowedDestinations))
 
-	// 7. Get server WireGuard information for client configuration
+	// 8. Get server WireGuard information for client configuration
 	log.Printf("🔍 Retrieving server WireGuard configuration...")
 	serverPublicKey, err := a.vpn.GetServerPublicKey()
 	if err != nil {
@@ -174,7 +172,7 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	}
 
 	// Build allowed IPs for routing: VPN subnet + specific service IPs
-	allowedIPsForRouting := []string{"10.0.0.0/24"} // Default VPN subnet
+	allowedIPsForRouting := a.vpn.GetDefaultAllowedIPs() // Default VPN subnet
 
 	// Add specific service IPs as /32 CIDRs
 	for _, endpoint := range svcEndpoints {

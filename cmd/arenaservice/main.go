@@ -26,9 +26,19 @@ func main() {
 	grpcAddr := getEnvWithDefault("GRPC_LISTEN_ADDR", ":443")
 	insecureMode := getEnvWithDefault("ARENA_INSECURE_DISABLE_MTLS", "false") == "true"
 
-	// Initialize managers
-	k8sManager := arena.NewK8sManager() // dummy implementation
-	vpnManager, err := arena.NewWGManager(wgInterface)
+	// Load CIDR configuration from environment variables (with defaults)
+	vpnSubnet := getEnvWithDefault("VPN_SUBNET", "10.0.0.0/24")
+	clusterCIDR := getEnvWithDefault("CLUSTER_CIDR", "10.42.0.0/24")
+	serviceCIDR := getEnvWithDefault("SERVICE_CIDR", "10.43.0.0/16")
+
+	log.Printf("🔧 Network Configuration:")
+	log.Printf("  VPN Subnet: %s", vpnSubnet)
+	log.Printf("  Cluster CIDR: %s", clusterCIDR)
+	log.Printf("  Service CIDR: %s", serviceCIDR)
+
+	// Initialize managers with CIDR configuration
+	k8sManager := arena.NewK8sManager(clusterCIDR, serviceCIDR)
+	vpnManager, err := arena.NewWGManager(wgInterface, vpnSubnet, serviceCIDR)
 	if err != nil {
 		log.Fatalf("Failed to initialize WireGuard manager: %v", err)
 	}

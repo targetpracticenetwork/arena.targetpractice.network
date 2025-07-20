@@ -18,28 +18,34 @@ type PeerConfig struct {
 
 // VPNManager defines the interface for managing VPN peers.
 type VPNManager interface {
-	CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConfig, error)
+	CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error)
 	RemovePeer(pubKey string) error
 	GetPeerStatus(pubKey string) (*PeerStatus, error)
 	CheckDevice() error
 	GetServerPublicKey() (string, error)
 	GetServerEndpoint() (string, error)
 	GetDefaultAllowedIPs() []string
+
+	// CIDR configuration methods
+	GetVPNSubnet() string
+	GetServiceCIDR() string
 }
 
 // WGManager is a concrete implementation of VPNManager using wgctrl.
 type WGManager struct {
-	InterfaceName     string
-	ServerPublicKey   string
-	ServerEndpoint    string
-	DefaultAllowedIPs []string
+	InterfaceName   string
+	ServerPublicKey string
+	ServerEndpoint  string
+	VPNSubnet       string // VPN subnet CIDR
+	ServiceCIDR     string // Kubernetes service network CIDR
 }
 
 // NewWGManager creates a new WGManager and initializes server configuration at startup.
-func NewWGManager(interfaceName string) (*WGManager, error) {
+func NewWGManager(interfaceName string, vpnSubnet string, serviceCIDR string) (*WGManager, error) {
 	mgr := &WGManager{
-		InterfaceName:     interfaceName,
-		DefaultAllowedIPs: []string{"10.0.0.0/24", "10.43.0.0/16"}, // VPN subnet + cluster services
+		InterfaceName: interfaceName,
+		VPNSubnet:     vpnSubnet,
+		ServiceCIDR:   serviceCIDR,
 	}
 
 	// Initialize server configuration at startup
@@ -85,9 +91,10 @@ func (w *WGManager) initializeServerConfig() error {
 	return nil
 }
 
-// CreatePeer adds a peer to the WireGuard interface using the provided public key and allowed IPs.
-func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConfig, error) {
-	log.Printf("🔐 Creating WireGuard peer - Interface: %s, Public Key: %s", w.InterfaceName, pubKey)
+// CreatePeer adds a peer to the WireGuard interface using the provided public key and destination IPs.
+func (w *WGManager) CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error) {
+	log.Printf("🔐 Creating WireGuard peer - Interface: %s, Public Key: %s, VPN IP: %s",
+		w.InterfaceName, pubKey, vpnIP.String())
 
 	client, err := wgctrl.New()
 	if err != nil {
@@ -102,9 +109,10 @@ func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConf
 		return nil, err
 	}
 
+	// Only allow the peer's VPN IP as source (server-side source validation)
 	peerCfg := wgtypes.PeerConfig{
 		PublicKey:         key,
-		AllowedIPs:        allowedIPs,
+		AllowedIPs:        []net.IPNet{vpnIP},
 		ReplaceAllowedIPs: true,
 	}
 
@@ -112,23 +120,19 @@ func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConf
 		Peers: []wgtypes.PeerConfig{peerCfg},
 	}
 
-	log.Printf("🔧 Configuring WireGuard device: %s", w.InterfaceName)
+	log.Printf("🔧 Configuring WireGuard device with source IP: %s", vpnIP.String())
 	err = client.ConfigureDevice(w.InterfaceName, cfg)
 	if err != nil {
 		log.Printf("❌ Failed to configure WireGuard device: %v", err)
 		return nil, err
 	}
 
-	// Only return the first allowed IP for encapsulation
-	allowedIP := ""
-	if len(allowedIPs) > 0 {
-		allowedIP = allowedIPs[0].String()
-	}
+	log.Printf("✅ WireGuard peer created - VPN IP: %s, Destinations: %d",
+		vpnIP.String(), len(allowedDestinations))
 
-	log.Printf("✅ WireGuard peer created successfully - Allowed IP: %s", allowedIP)
 	return &PeerConfig{
 		PublicKey: key.String(),
-		AllowedIP: allowedIP,
+		AllowedIP: vpnIP.String(),
 	}, nil
 }
 
@@ -235,7 +239,17 @@ func (w *WGManager) GetServerEndpoint() (string, error) {
 	return w.ServerEndpoint, nil
 }
 
-// GetDefaultAllowedIPs returns the default allowed IPs for client routing (cached at startup).
+// GetDefaultAllowedIPs returns the default allowed IPs for client routing.
 func (w *WGManager) GetDefaultAllowedIPs() []string {
-	return w.DefaultAllowedIPs
+	return []string{w.VPNSubnet, w.ServiceCIDR}
+}
+
+// GetVPNSubnet returns the VPN subnet CIDR.
+func (w *WGManager) GetVPNSubnet() string {
+	return w.VPNSubnet
+}
+
+// GetServiceCIDR returns the Kubernetes service network CIDR.
+func (w *WGManager) GetServiceCIDR() string {
+	return w.ServiceCIDR
 }
