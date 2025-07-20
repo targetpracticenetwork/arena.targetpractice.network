@@ -1,6 +1,7 @@
 package arena
 
 import (
+	"log"
 	"net"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
@@ -28,14 +29,18 @@ type WGManager struct {
 
 // CreatePeer adds a peer to the WireGuard interface using the provided public key and allowed IPs.
 func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConfig, error) {
+	log.Printf("🔐 Creating WireGuard peer - Interface: %s, Public Key: %s", w.InterfaceName, pubKey)
+	
 	client, err := wgctrl.New()
 	if err != nil {
+		log.Printf("❌ Failed to create WireGuard client: %v", err)
 		return nil, err
 	}
 	defer client.Close()
 
 	key, err := wgtypes.ParseKey(pubKey)
 	if err != nil {
+		log.Printf("❌ Failed to parse WireGuard public key: %v", err)
 		return nil, err
 	}
 
@@ -49,8 +54,10 @@ func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConf
 		Peers: []wgtypes.PeerConfig{peerCfg},
 	}
 
+	log.Printf("🔧 Configuring WireGuard device: %s", w.InterfaceName)
 	err = client.ConfigureDevice(w.InterfaceName, cfg)
 	if err != nil {
+		log.Printf("❌ Failed to configure WireGuard device: %v", err)
 		return nil, err
 	}
 
@@ -60,6 +67,7 @@ func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConf
 		allowedIP = allowedIPs[0].String()
 	}
 
+	log.Printf("✅ WireGuard peer created successfully - Allowed IP: %s", allowedIP)
 	return &PeerConfig{
 		PublicKey: key.String(),
 		AllowedIP: allowedIP,
@@ -68,27 +76,42 @@ func (w *WGManager) CreatePeer(pubKey string, allowedIPs []net.IPNet) (*PeerConf
 
 // RemovePeer removes a peer from the WireGuard interface using the provided public key.
 func (w *WGManager) RemovePeer(pubKey string) error {
+	log.Printf("🗑️ Removing WireGuard peer - Interface: %s, Public Key: %s", w.InterfaceName, pubKey)
+	
 	client, err := wgctrl.New()
 	if err != nil {
+		log.Printf("❌ Failed to create WireGuard client: %v", err)
 		return err
 	}
 	defer client.Close()
 
 	key, err := wgtypes.ParseKey(pubKey)
 	if err != nil {
+		log.Printf("❌ Failed to parse WireGuard public key: %v", err)
 		return err
 	}
 
+	// Remove the peer by setting an empty allowed IPs list
 	peerCfg := wgtypes.PeerConfig{
-		PublicKey: key,
-		Remove:    true,
+		PublicKey:         key,
+		AllowedIPs:        []net.IPNet{},
+		ReplaceAllowedIPs: true,
+		Remove:            true,
 	}
 
 	cfg := wgtypes.Config{
 		Peers: []wgtypes.PeerConfig{peerCfg},
 	}
 
-	return client.ConfigureDevice(w.InterfaceName, cfg)
+	log.Printf("🔧 Removing peer from WireGuard device: %s", w.InterfaceName)
+	err = client.ConfigureDevice(w.InterfaceName, cfg)
+	if err != nil {
+		log.Printf("❌ Failed to remove WireGuard peer: %v", err)
+		return err
+	}
+
+	log.Printf("✅ WireGuard peer removed successfully")
+	return nil
 }
 
 // GetPeerStatus returns information about the peer with the given public key.

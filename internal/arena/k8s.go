@@ -103,6 +103,7 @@ func NewK8sManager() K8sManager {
 }
 
 func (k *k8sManager) CreateNamespace(name string, labels map[string]string) error {
+	log.Printf("📦 Creating Kubernetes namespace: %s with labels: %v", name, labels)
 	ns := &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   name,
@@ -110,11 +111,23 @@ func (k *k8sManager) CreateNamespace(name string, labels map[string]string) erro
 		},
 	}
 	_, err := k.clientset.CoreV1().Namespaces().Create(context.Background(), ns, metav1.CreateOptions{})
-	return err
+	if err != nil {
+		log.Printf("❌ Failed to create namespace %s: %v", name, err)
+		return err
+	}
+	log.Printf("✅ Namespace created successfully: %s", name)
+	return nil
 }
 
 func (k *k8sManager) DeleteNamespace(name string) error {
-	return k.clientset.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{})
+	log.Printf("🗑️ Deleting Kubernetes namespace: %s", name)
+	err := k.clientset.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{})
+	if err != nil {
+		log.Printf("❌ Failed to delete namespace %s: %v", name, err)
+		return err
+	}
+	log.Printf("✅ Namespace deletion initiated: %s", name)
+	return nil
 }
 
 func (k *k8sManager) CreatePods(namespace string, pods []*v1.Pod) error {
@@ -374,47 +387,67 @@ func (k *k8sManager) ValidateSpec(challengeSpec string) error {
 }
 
 func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([]*ServiceEndpoint, error) {
+	log.Printf("🚀 Creating resources from spec in namespace: %s", namespace)
+	
 	// Parse the challenge spec
 	var spec ChallengeSpec
 	if err := yaml.Unmarshal([]byte(challengeSpec), &spec); err != nil {
+		log.Printf("❌ Failed to parse challenge spec: %v", err)
 		return nil, fmt.Errorf("failed to parse challenge spec: %w", err)
 	}
+	log.Printf("✅ Challenge spec parsed - Pods: %d, Services: %d", len(spec.Pods), len(spec.Services))
 
 	// Create pods first
 	var pods []*v1.Pod
 	for _, podSpec := range spec.Pods {
+		log.Printf("📦 Creating pod: %s with image: %s", podSpec.Name, podSpec.Image)
 		pod, err := k.createPodFromSpec(namespace, podSpec)
 		if err != nil {
+			log.Printf("❌ Failed to create pod %s: %v", podSpec.Name, err)
 			return nil, fmt.Errorf("failed to create pod %s: %w", podSpec.Name, err)
 		}
 		pods = append(pods, pod)
+		log.Printf("✅ Pod spec created: %s", podSpec.Name)
 	}
 
 	// Create the pods
+	log.Printf("🚀 Creating %d pods in namespace: %s", len(pods), namespace)
 	if err := k.CreatePods(namespace, pods); err != nil {
+		log.Printf("❌ Failed to create pods: %v", err)
 		return nil, fmt.Errorf("failed to create pods: %w", err)
 	}
+	log.Printf("✅ All pods created successfully")
 
 	// Create services
 	var services []*v1.Service
 	for _, svcSpec := range spec.Services {
+		log.Printf("🔗 Creating service: %s", svcSpec.Name)
 		svc, err := k.createServiceFromSpec(namespace, svcSpec)
 		if err != nil {
+			log.Printf("❌ Failed to create service %s: %v", svcSpec.Name, err)
 			return nil, fmt.Errorf("failed to create service %s: %w", svcSpec.Name, err)
 		}
 		services = append(services, svc)
+		log.Printf("✅ Service spec created: %s", svcSpec.Name)
 	}
 
 	// Create the services
-	if err := k.CreateServices(namespace, services); err != nil {
-		return nil, fmt.Errorf("failed to create services: %w", err)
+	if len(services) > 0 {
+		log.Printf("🚀 Creating %d services in namespace: %s", len(services), namespace)
+		if err := k.CreateServices(namespace, services); err != nil {
+			log.Printf("❌ Failed to create services: %v", err)
+			return nil, fmt.Errorf("failed to create services: %w", err)
+		}
+		log.Printf("✅ All services created successfully")
 	}
 
 	// Now fetch the created services to get their assigned cluster IPs
 	var endpoints []*ServiceEndpoint
 	for _, svcSpec := range spec.Services {
+		log.Printf("🔍 Fetching service details: %s", svcSpec.Name)
 		createdSvc, err := k.clientset.CoreV1().Services(namespace).Get(context.Background(), svcSpec.Name, metav1.GetOptions{})
 		if err != nil {
+			log.Printf("❌ Failed to get created service %s: %v", svcSpec.Name, err)
 			return nil, fmt.Errorf("failed to get created service %s: %w", svcSpec.Name, err)
 		}
 
@@ -428,8 +461,10 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 			endpoint.Ports[i] = port.Port
 		}
 		endpoints = append(endpoints, endpoint)
+		log.Printf("✅ Service endpoint created: %s -> %s", svcSpec.Name, createdSvc.Spec.ClusterIP)
 	}
 
+	log.Printf("🎉 Resource creation completed - Endpoints: %d", len(endpoints))
 	return endpoints, nil
 }
 

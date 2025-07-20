@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -50,6 +51,8 @@ func pubKeyToNamespace(pubKey string) string {
 // CreateArena provisions a new arena for the user: creates K8s resources and a VPN peer.
 func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error) {
 	ns := pubKeyToNamespace(publicKey)
+	log.Printf("🏗️ Creating arena - Namespace: %s, Challenge: %s", ns, challengeName)
+	
 	// Create URL-safe public key hash for labels
 	hash := sha256.Sum256([]byte(publicKey))
 	keyHash := base32.StdEncoding.EncodeToString(hash[:8]) // 16 chars, no padding
@@ -62,20 +65,29 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	}
 
 	// 1. Validate the challenge spec before parsing/creating resources
+	log.Printf("🔍 Validating challenge spec for namespace: %s", ns)
 	if err := a.k8s.ValidateSpec(challengeSpec); err != nil {
+		log.Printf("❌ Challenge spec validation failed: %v", err)
 		return nil, fmt.Errorf("invalid challenge spec: %w", err)
 	}
+	log.Printf("✅ Challenge spec validated successfully")
 
 	// 2. Create namespace for the user
+	log.Printf("📦 Creating namespace: %s", ns)
 	if err := a.k8s.CreateNamespace(ns, labels); err != nil {
+		log.Printf("❌ Namespace creation failed: %v", err)
 		return nil, fmt.Errorf("failed to create namespace: %w", err)
 	}
+	log.Printf("✅ Namespace created: %s", ns)
 
 	// 3. Let K8sManager handle all resource creation and endpoint extraction
+	log.Printf("🚀 Creating Kubernetes resources from spec")
 	k8sEndpoints, err := a.k8s.CreateResourcesFromSpec(ns, challengeSpec)
 	if err != nil {
+		log.Printf("❌ Resource creation failed: %v", err)
 		return nil, fmt.Errorf("failed to create resources from spec: %w", err)
 	}
+	log.Printf("✅ Kubernetes resources created - Endpoints: %d", len(k8sEndpoints))
 
 	// Convert []k8s.ServiceEndpoint to []*ServiceEndpoint
 	var svcEndpoints []*ServiceEndpoint
@@ -89,22 +101,29 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	}
 
 	// 4. Apply NetworkPolicy to allow ingress only from the user's VPN IP
+	log.Printf("🛡️ Applying network policy for VPN IP: %s", vpnIP)
 	if err := a.k8s.ApplyNetworkPolicy(ns, vpnIP); err != nil {
+		log.Printf("❌ Network policy application failed: %v", err)
 		return nil, fmt.Errorf("failed to apply network policy: %w", err)
 	}
+	log.Printf("✅ Network policy applied")
 
 	// 5. Only allow the user's VPN IP as AllowedIP for the peer
 	_, ipnet, err := net.ParseCIDR(vpnIP)
 	if err != nil {
+		log.Printf("❌ Invalid VPN IP format: %s", vpnIP)
 		return nil, fmt.Errorf("invalid VPN IP: %s", vpnIP)
 	}
 	allowedIPNets := []net.IPNet{*ipnet}
 
 	// 6. Create VPN peer for the user
+	log.Printf("🔐 Creating VPN peer for public key: %s", publicKey)
 	peerCfg, err := a.vpn.CreatePeer(publicKey, allowedIPNets)
 	if err != nil {
+		log.Printf("❌ VPN peer creation failed for public key %s: %v", publicKey, err)
 		return nil, fmt.Errorf("failed to create VPN peer: %w", err)
 	}
+	log.Printf("✅ VPN peer created - Allowed IP: %s", peerCfg.AllowedIP)
 
 	// Helper to convert []*ServiceEndpoint to []*ServiceEndpoint (proto)
 	convertServiceEndpoints := func(src []*ServiceEndpoint) []*ServiceEndpoint {
@@ -119,43 +138,64 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 		return out
 	}
 
-	return &ArenaConfig{
+	config := &ArenaConfig{
 		PublicKey:   peerCfg.PublicKey,
 		AllowedIp:   peerCfg.AllowedIP,
 		ChallengeId: challengeName,
 		Namespace:   ns,
 		Endpoints:   convertServiceEndpoints(svcEndpoints),
-	}, nil
+	}
+	
+	log.Printf("🎉 Arena creation completed - Namespace: %s, Endpoints: %d", ns, len(config.Endpoints))
+	return config, nil
 }
 
 // DestroyArena tears down all resources for the user's arena.
 func (a *arenaManager) DestroyArena(publicKey string) error {
 	ns := pubKeyToNamespace(publicKey)
+	log.Printf("🗑️ Destroying arena - Namespace: %s", ns)
+	
+	log.Printf("🔐 Removing VPN peer for public key: %s", publicKey)
 	if err := a.vpn.RemovePeer(publicKey); err != nil {
+		log.Printf("❌ VPN peer removal failed for public key %s: %v", publicKey, err)
 		return fmt.Errorf("failed to remove VPN peer: %w", err)
 	}
+	log.Printf("✅ VPN peer removed")
 
+	log.Printf("📦 Deleting namespace: %s", ns)
 	if err := a.k8s.DeleteNamespace(ns); err != nil {
+		log.Printf("❌ Namespace deletion failed: %v", err)
 		return fmt.Errorf("failed to delete namespace: %w", err)
 	}
+	log.Printf("✅ Namespace deleted: %s")
+	
+	log.Printf("🎉 Arena destruction completed - Namespace: %s", ns)
 	return nil
 }
 
 // GetArenaStatus returns the current status of the user's arena.
 func (a *arenaManager) GetArenaStatus(publicKey string) (*ArenaStatus, error) {
 	ns := pubKeyToNamespace(publicKey)
+	log.Printf("📊 Getting arena status - Namespace: %s", ns)
 
 	// Get VPN peer status
+	log.Printf("🔐 Getting VPN peer status for public key: %s", publicKey)
 	vpnStatus, err := a.vpn.GetPeerStatus(publicKey)
 	if err != nil {
+		log.Printf("❌ VPN peer status failed for public key %s: %v", publicKey, err)
 		return nil, fmt.Errorf("failed to get VPN peer status: %w", err)
 	}
+	log.Printf("✅ VPN peer status retrieved")
 
 	// Get K8s namespace status
+	log.Printf("📦 Getting Kubernetes namespace status: %s", ns)
 	k8sStatus, err := a.k8s.GetNamespaceStatus(ns)
 	if err != nil {
+		log.Printf("❌ Kubernetes namespace status failed: %v", err)
 		return nil, fmt.Errorf("failed to get namespace status: %w", err)
 	}
+	log.Printf("✅ Kubernetes namespace status retrieved - Pods: %d, Services: %d", 
+		k8sStatus.GetPodCount(), k8sStatus.GetServiceCount())
 
 	// Determine overall health and collect errors
 	var errors []string
@@ -165,6 +205,7 @@ func (a *arenaManager) GetArenaStatus(publicKey string) (*ArenaStatus, error) {
 	if vpnStatus == nil {
 		errors = append(errors, "VPN peer not found")
 		healthy = false
+		log.Printf("⚠️ VPN peer not found")
 	}
 
 	// Check K8s health
@@ -172,32 +213,46 @@ func (a *arenaManager) GetArenaStatus(publicKey string) (*ArenaStatus, error) {
 		if k8sStatus.Phase != "Active" {
 			errors = append(errors, fmt.Sprintf("Namespace phase: %s", k8sStatus.Phase))
 			healthy = false
+			log.Printf("⚠️ Namespace phase: %s", k8sStatus.Phase)
 		}
 		if k8sStatus.PodsFailed > 0 {
 			errors = append(errors, fmt.Sprintf("%d pods failed", k8sStatus.PodsFailed))
 			healthy = false
+			log.Printf("⚠️ %d pods failed", k8sStatus.PodsFailed)
 		}
 		if k8sStatus.ServicesReady < k8sStatus.ServicesTotal {
 			errors = append(errors, fmt.Sprintf("%d/%d services ready", k8sStatus.ServicesReady, k8sStatus.ServicesTotal))
 			healthy = false
+			log.Printf("⚠️ %d/%d services ready", k8sStatus.ServicesReady, k8sStatus.ServicesTotal)
 		}
 		if !k8sStatus.NetworkPolicyApplied {
 			errors = append(errors, "Network policy not applied")
 			healthy = false
+			log.Printf("⚠️ Network policy not applied")
 		}
 		// Add any namespace-specific errors
 		errors = append(errors, k8sStatus.Errors...)
 	} else {
 		errors = append(errors, "Namespace not found")
 		healthy = false
+		log.Printf("⚠️ Namespace not found")
 	}
 
-	return &ArenaStatus{
+	status := &ArenaStatus{
 		PublicKey: publicKey,
 		Namespace: ns,
 		VpnStatus: vpnStatus,
 		K8SStatus: k8sStatus,
 		Healthy:   healthy,
 		Errors:    errors,
-	}, nil
+	}
+	
+	healthStatus := "✅"
+	if !healthy {
+		healthStatus = "❌"
+	}
+	log.Printf("📊 Arena status completed - Namespace: %s, Healthy: %s, Errors: %d", 
+		ns, healthStatus, len(errors))
+	
+	return status, nil
 }
