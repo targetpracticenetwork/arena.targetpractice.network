@@ -2,7 +2,7 @@
 
 set -e
 
-echo "🚀 Setting up server for ArenaService with k3s..."
+echo "🚀 Complete ArenaService setup (Server + k3s + Deployment)..."
 
 # Check architecture
 ARCH=$(uname -m)
@@ -22,9 +22,6 @@ sudo apt install -y \
     vim \
     ufw \
     fail2ban \
-    nginx \
-    certbot \
-    python3-certbot-nginx \
     wireguard-tools \
     iptables \
     iproute2
@@ -34,9 +31,9 @@ echo "🔥 Configuring firewall..."
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
 sudo ufw allow ssh
-sudo ufw allow 443/tcp
-sudo ufw allow 11820/udp
-sudo ufw allow 6443/tcp  # k3s API
+sudo ufw allow 443/tcp    # ArenaService gRPC
+sudo ufw allow 11820/udp  # WireGuard
+sudo ufw allow 6443/tcp   # k3s API
 sudo ufw --force enable
 
 # Configure fail2ban
@@ -44,157 +41,132 @@ echo "🛡️ Configuring fail2ban..."
 sudo systemctl enable fail2ban
 sudo systemctl start fail2ban
 
-
-
-# Install k3s with architecture-specific optimizations
+# Install k3s
 echo "☸️ Installing k3s..."
-if [ "$ARCH" = "aarch64" ]; then
-    echo "📱 Installing k3s for ARM64..."
-    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --write-kubeconfig-mode=644" sh -
+if command -v k3s > /dev/null 2>&1; then
+    echo "✅ k3s is already installed"
 else
-    echo "💻 Installing k3s for x86_64..."
-    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --write-kubeconfig-mode=644" sh -
+    echo "📦 Installing k3s..."
+    # Disable traefik since ArenaService uses LoadBalancer service directly
+    if [ "$ARCH" = "aarch64" ]; then
+        echo "📱 Installing k3s for ARM64..."
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --write-kubeconfig-mode=644" sh -
+    else
+        echo "💻 Installing k3s for x86_64..."
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --write-kubeconfig-mode=644" sh -
+    fi
+    
+    # Wait for k3s to be ready
+    echo "⏳ Waiting for k3s to start..."
+    sleep 30
 fi
-
-# Wait for k3s to be ready
-echo "⏳ Waiting for k3s to start..."
-sleep 30
 
 # Set kubeconfig
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+sudo chmod 644 $KUBECONFIG
 
 # Verify k3s is running
 echo "🔍 Verifying k3s installation..."
 kubectl get nodes
+kubectl get pods --all-namespaces
 
-# Install ingress controller
-echo "📦 Installing ingress controller..."
-kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/baremetal/deploy.yaml
-
-# Build and deploy ArenaService to k3s
-echo "🔨 Building and deploying ArenaService to k3s..."
-if [ -d "/home/topman/arena.targetpractice.network" ]; then
-    cd /home/topman/arena.targetpractice.network
+# Build and deploy ArenaService
+echo "🔨 Building and deploying ArenaService..."
+if [ -f "go.mod" ]; then
+    # Build static binary
+    echo "🔨 Building static binary..."
     CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -o bin/arenaservice-static ./cmd/arenaservice
-    kubectl apply -k ./cluster/control-plane/
-    echo "✅ ArenaService deployed to k3s"
+    
+    # Deploy ArenaService cluster configuration
+    echo "🏗️ Applying ArenaService cluster configuration..."
+    
+    # Control plane (ArenaService with integrated WireGuard)
+    echo "🎮 Applying control plane..."
+    kubectl apply -k ./cluster/control-plane
+    
+    # Arena area baseline configuration
+    echo "🏟️ Applying arena area..."
+    kubectl apply -k ./cluster/arena-area
+    
+    # Wait for all pods to be ready
+    echo "⏳ Waiting for ArenaService to be ready..."
+    kubectl wait --for=condition=available --timeout=300s deployment/arenaservice -n control-plane
+    
+    echo "✅ ArenaService deployed successfully!"
 else
-    echo "⚠️  ArenaService repository not found at /home/topman/arena.targetpractice.network"
-    echo "   Run 'make k3s-deploy' after cloning the repository"
+    echo "⚠️  ArenaService repository not found (no go.mod)"
+    echo "   Please run this script from the ArenaService root directory"
 fi
 
 # Create monitoring script
 echo "📊 Creating monitoring script..."
-sudo tee /opt/monitor-arena.sh > /dev/null <<EOF
+sudo tee /opt/monitor-arena.sh > /dev/null <<'EOF'
 #!/bin/bash
 export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 echo "=== Server Status ==="
-echo "Architecture: \$(uname -m)"
-echo "CPU: \$(nproc) cores"
-echo "Memory: \$(free -h | grep Mem | awk '{print \$2}')"
+echo "Architecture: $(uname -m)"
+echo "CPU: $(nproc) cores"
+echo "Memory: $(free -h | grep Mem | awk '{print $2}')"
 echo ""
 echo "=== k3s Cluster Status ==="
 kubectl get nodes
 echo ""
 echo "=== ArenaService Status ==="
-kubectl get pods --all-namespaces
+kubectl get pods -n control-plane
+kubectl get service -n control-plane
 echo ""
-echo "=== ArenaService Logs ==="
-kubectl logs -n control-plane deployment/arenaservice --tail=10 2>/dev/null || echo "ArenaService not running"
+echo "=== WireGuard Status ==="
+kubectl exec -n control-plane deployment/arenaservice -- ip link show wg0 2>/dev/null || echo "WireGuard interface not ready"
 echo ""
-echo "=== System Resources ==="
-free -h
-echo ""
-df -h
+echo "=== Recent Logs ==="
+kubectl logs -n control-plane deployment/arenaservice --tail=5
 EOF
 
 sudo chmod +x /opt/monitor-arena.sh
 
 # Create backup script
 echo "💾 Creating backup script..."
-sudo tee /opt/backup-arena.sh > /dev/null <<EOF
+sudo tee /opt/backup-arena.sh > /dev/null <<'EOF'
 #!/bin/bash
-BACKUP_DIR="/opt/backups/\$(date +%Y%m%d_%H%M%S)"
-mkdir -p \$BACKUP_DIR
+BACKUP_DIR="/opt/arena-backups"
+DATE=$(date +%Y%m%d_%H%M%S)
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-# Backup k3s data
-sudo tar -czf \$BACKUP_DIR/k3s-data.tar.gz /var/lib/rancher/k3s
+mkdir -p $BACKUP_DIR
 
-# Backup WireGuard config
-sudo cp -r /etc/wireguard \$BACKUP_DIR/
+echo "🗄️ Backing up ArenaService configuration..."
+kubectl get all -n control-plane -o yaml > $BACKUP_DIR/arenaservice_$DATE.yaml
+kubectl get configmaps,secrets -n control-plane -o yaml > $BACKUP_DIR/config_$DATE.yaml
 
-# Backup ArenaService config
-sudo cp -r /opt/arenaservice \$BACKUP_DIR/
-
-# Backup system info
-echo "Server Backup" > \$BACKUP_DIR/system-info.txt
-uname -a >> \$BACKUP_DIR/system-info.txt
-echo "" >> \$BACKUP_DIR/system-info.txt
-echo "CPU Info:" >> \$BACKUP_DIR/system-info.txt
-lscpu >> \$BACKUP_DIR/system-info.txt
-
-echo "Backup created: \$BACKUP_DIR"
+echo "✅ Backup completed: $BACKUP_DIR/"
+ls -la $BACKUP_DIR/
 EOF
 
 sudo chmod +x /opt/backup-arena.sh
 
-# Set up log rotation
-echo "📝 Setting up log rotation..."
-sudo tee /etc/logrotate.d/arenaservice > /dev/null <<EOF
-/var/log/arenaservice.log {
-    daily
-    missingok
-    rotate 7
-    compress
-    delaycompress
-    notifempty
-    create 644 root root
-}
-EOF
-
-# Apply system optimizations
-echo "⚡ Applying system optimizations..."
-echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
-echo 'vm.vfs_cache_pressure=50' | sudo tee -a /etc/sysctl.conf
-echo 'vm.dirty_ratio=15' | sudo tee -a /etc/sysctl.conf
-echo 'vm.dirty_background_ratio=5' | sudo tee -a /etc/sysctl.conf
-
-# Apply sysctl changes
-sudo sysctl -p
-
 echo ""
-echo "🎉 Server setup complete!"
+echo "🎉 Complete ArenaService setup finished!"
 echo ""
-echo "📋 Server Info:"
-echo "  Architecture: $(uname -m)"
-echo "  CPU Cores: $(nproc)"
-echo "  Memory: $(free -h | grep Mem | awk '{print $2}')"
-echo "  Storage: $(df -h / | awk 'NR==2 {print $2}')"
+echo "📋 Cluster info:"
+kubectl cluster-info
 echo ""
-echo "📋 Next steps:"
-echo "1. Clone your ArenaService repository"
-echo "2. Run: make k3s-deploy"
-echo "3. Configure SSL certificates"
-echo "4. Set up monitoring"
+echo "📋 Pod Status:"
+kubectl get pods -n control-plane
 echo ""
-echo "🔗 Useful commands:"
-echo "  /opt/monitor-arena.sh    - Check system status"
-echo "  /opt/backup-arena.sh     - Create backup"
-echo "  sudo systemctl status k3s"
+echo "📋 Service (LoadBalancer):"
+kubectl get service -n control-plane
+echo ""
+echo "🔗 Access points:"
+echo "  Kubernetes API: https://localhost:6443"
+echo "  ArenaService gRPC: localhost:443 (LoadBalancer)"
+echo "  WireGuard Server: localhost:11820/udp"
+echo ""
+echo "📖 Useful commands:"
 echo "  kubectl get pods --all-namespaces"
-echo "  kubectl logs -n control-plane deployment/arenaservice"
+echo "  kubectl logs -n control-plane deployment/arenaservice -f"
+echo "  kubectl get services -n control-plane"
+echo "  /opt/monitor-arena.sh    # Server monitoring"
+echo "  /opt/backup-arena.sh     # Configuration backup"
 echo ""
-echo "🛡️ Security:"
-echo "  - Firewall configured (UFW)"
-echo "  - Fail2ban enabled"
-echo "  - SSH access only"
-echo ""
-echo "⚡ Optimizations:"
-echo "  - CPU scheduling optimized"
-echo "  - Memory management tuned"
-echo "  - k3s $(uname -m) support enabled"
-echo ""
-echo "📊 Expected Performance:"
-echo "  - 5-10 concurrent arenas"
-echo "  - Fast arena creation (< 3s)"
-echo "  - Efficient resource usage" 
+echo "🛑 To stop k3s: sudo systemctl stop k3s"
+echo "🗑️  To uninstall k3s: /usr/local/bin/k3s-uninstall.sh" 

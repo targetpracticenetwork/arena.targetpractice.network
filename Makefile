@@ -21,11 +21,6 @@ setup:
 	chmod +x scripts/setup.sh
 	./scripts/setup.sh
 
-# k3s cluster setup
-k3s-setup:
-	chmod +x scripts/k3s-setup.sh
-	./scripts/k3s-setup.sh
-
 # Stop k3s
 k3s-stop:
 	sudo systemctl stop k3s

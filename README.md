@@ -20,7 +20,7 @@ arena/
 │   ├── control-plane/       # Control plane infra (ArenaService with integrated WireGuard)
 │   ├── arena-area/          # Baseline for user challenge area (network policies, quotas)
 │   └── README.md            # Cluster setup instructions
-├── scripts/                 # Helper scripts (setup.sh, k3s-setup.sh, wireguard-setup.sh)
+├── scripts/                 # Helper scripts (setup.sh, deploy.sh)
 ├── Makefile
 └── README.md
 ```

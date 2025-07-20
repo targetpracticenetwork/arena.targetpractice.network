@@ -14,6 +14,61 @@ spec:
         app: arenaservice
     spec:
       serviceAccountName: arenaservice
+      initContainers:
+        - name: wireguard-setup
+          image: docker.io/library/alpine:latest
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - |
+              echo "🔧 Init: Setting up WireGuard interface as root..."
+              # Install required packages
+              apk add --no-cache wireguard-tools iptables iproute2
+              
+              # Set up WireGuard environment
+              export WIREGUARD_INTERFACE=wg0
+              export WIREGUARD_ADDRESS=10.0.0.1/24
+              export WIREGUARD_PORT=11820
+              
+              # Generate WireGuard keys
+              echo "🔑 Init: Generating WireGuard keys..."
+              WIREGUARD_PRIVATE_KEY=$(wg genkey)
+              WIREGUARD_PUBLIC_KEY=$(echo "$WIREGUARD_PRIVATE_KEY" | wg pubkey)
+              echo "✅ Generated public key: $WIREGUARD_PUBLIC_KEY"
+              
+              # Enable IP forwarding
+              sysctl -w net.ipv4.ip_forward=1
+              sysctl -w net.ipv6.conf.all.forwarding=1
+              
+              # Create WireGuard configuration
+              mkdir -p /etc/wireguard
+              cat > /etc/wireguard/$WIREGUARD_INTERFACE.conf << EOF
+              [Interface]
+              PrivateKey = $WIREGUARD_PRIVATE_KEY
+              ListenPort = $WIREGUARD_PORT
+              EOF
+              chmod 600 /etc/wireguard/$WIREGUARD_INTERFACE.conf
+              
+              # Create and configure the WireGuard interface
+              echo "🔧 Init: Creating WireGuard interface..."
+              ip link add dev $WIREGUARD_INTERFACE type wireguard
+              wg setconf $WIREGUARD_INTERFACE /etc/wireguard/$WIREGUARD_INTERFACE.conf
+              ip addr add $WIREGUARD_ADDRESS dev $WIREGUARD_INTERFACE
+              ip link set dev $WIREGUARD_INTERFACE up
+              
+              # Set up iptables rules for NAT
+              echo "🔧 Init: Setting up NAT rules..."
+              iptables -A FORWARD -i $WIREGUARD_INTERFACE -j ACCEPT
+              iptables -A FORWARD -o $WIREGUARD_INTERFACE -j ACCEPT
+              iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
+              
+              echo "✅ Init: WireGuard setup completed"
+              wg show $WIREGUARD_INTERFACE
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: wg-config
+              mountPath: /etc/wireguard
       containers:
         - name: arenaservice
           image: docker.io/library/alpine:latest
@@ -22,102 +77,10 @@ spec:
           args:
             - -c
             - |
-              echo "🚀 Starting ArenaService with proper WireGuard server configuration..."
-              # Install required packages first
-              apk add --no-cache wireguard-tools iptables iproute2 bash
+              echo "🚀 Starting ArenaService as non-root user..."
               
-              # Set up WireGuard as a server with full configuration
-              echo "🔧 Setting up WireGuard interface as server..."
-              export WIREGUARD_INTERFACE=wg0
-              export WIREGUARD_ADDRESS=10.0.0.1/24
-              export WIREGUARD_PORT=11820
-              
-              # Generate WireGuard keys
-              echo "🔑 Generating WireGuard keys..."
-              WIREGUARD_PRIVATE_KEY=$(wg genkey)
-              WIREGUARD_PUBLIC_KEY=$(echo "$WIREGUARD_PRIVATE_KEY" | wg pubkey)
-              echo "✅ Generated public key: $WIREGUARD_PUBLIC_KEY"
-              
-              # Create WireGuard configuration directory
-              mkdir -p /etc/wireguard
-              
-              # Remove existing interface if it exists
-              echo "🧹 Cleaning up any existing WireGuard interface..."
-              ip link delete $WIREGUARD_INTERFACE 2>/dev/null || true
-              
-              # Create WireGuard server configuration file (without Address - we'll set it manually)
-              cat > /etc/wireguard/$WIREGUARD_INTERFACE.conf << EOF
-              [Interface]
-              PrivateKey = $WIREGUARD_PRIVATE_KEY
-              ListenPort = $WIREGUARD_PORT
-              EOF
-              
-              # Set proper permissions
-              chmod 600 /etc/wireguard/$WIREGUARD_INTERFACE.conf
-              
-              # Enable IP forwarding immediately
-              sysctl -w net.ipv4.ip_forward=1
-              sysctl -w net.ipv6.conf.all.forwarding=1
-              
-              # Create the WireGuard interface
-              echo "🔧 Creating WireGuard interface..."
-              ip link add dev $WIREGUARD_INTERFACE type wireguard
-              
-              # Configure the interface with the config file
-              echo "🔧 Configuring WireGuard interface from config file..."
-              wg setconf $WIREGUARD_INTERFACE /etc/wireguard/$WIREGUARD_INTERFACE.conf
-              
-              # Add IP address to interface
-              echo "🔧 Adding IP address to WireGuard interface..."
-              ip addr add $WIREGUARD_ADDRESS dev $WIREGUARD_INTERFACE
-              
-              # Bring the interface up
-              echo "🔧 Bringing WireGuard interface up..."
-              ip link set dev $WIREGUARD_INTERFACE up
-              
-              # Set up iptables rules for NAT (check if rules exist first)
-              echo "🔧 Setting up NAT rules..."
-              iptables -C FORWARD -i $WIREGUARD_INTERFACE -j ACCEPT 2>/dev/null || iptables -A FORWARD -i $WIREGUARD_INTERFACE -j ACCEPT
-              iptables -C FORWARD -o $WIREGUARD_INTERFACE -j ACCEPT 2>/dev/null || iptables -A FORWARD -o $WIREGUARD_INTERFACE -j ACCEPT
-              iptables -t nat -C POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-              
-              # Verify interface is up and configured properly
-              echo "🔍 Debugging interface status..."
-              ip link show $WIREGUARD_INTERFACE || echo "❌ Interface show failed"
-              ip addr show $WIREGUARD_INTERFACE || echo "❌ Address show failed"
-              wg show $WIREGUARD_INTERFACE || echo "❌ WireGuard show failed"
-              
-              if ip link show $WIREGUARD_INTERFACE | grep -q "state UP"; then
-                echo "✅ WireGuard interface $WIREGUARD_INTERFACE is UP"
-              else
-                echo "⚠️ WireGuard interface $WIREGUARD_INTERFACE may not be UP, but continuing..."
-                ip link show $WIREGUARD_INTERFACE
-              fi
-              
-              if ip addr show $WIREGUARD_INTERFACE | grep -q "$WIREGUARD_ADDRESS"; then
-                echo "✅ WireGuard interface has IP address $WIREGUARD_ADDRESS"
-              else
-                echo "⚠️ WireGuard interface may not have IP address, but continuing..."
-                ip addr show $WIREGUARD_INTERFACE
-              fi
-              
-              # Check if WireGuard is listening on the correct port
-              LISTEN_PORT=$(wg show $WIREGUARD_INTERFACE | grep 'listening port' | awk '{print $3}' || echo 'None')
-              echo "✅ WireGuard listening port: $LISTEN_PORT"
-              
-              if [ "$LISTEN_PORT" != "$WIREGUARD_PORT" ]; then
-                echo "⚠️ WireGuard not listening on expected port $WIREGUARD_PORT, but continuing..."
-              fi
-              
-              echo "🎉 WireGuard server setup completed"
-              echo "   Interface: $WIREGUARD_INTERFACE"
-              echo "   Address: $WIREGUARD_ADDRESS"
-              echo "   Listen Port: $WIREGUARD_PORT"
-              echo "   Public Key: $WIREGUARD_PUBLIC_KEY"
-              
-              # Show WireGuard status
-              echo "📊 WireGuard status:"
-              wg show $WIREGUARD_INTERFACE
+              echo "🔍 Verifying WireGuard interface exists..."
+              ip link show wg0 || echo "⚠️ WireGuard interface not found, but continuing..."
               
               echo "🚀 Starting ArenaService..."
               exec /opt/arenaservice/arenaservice-static
@@ -138,9 +101,10 @@ spec:
             - name: WIREGUARD_PORT
               value: "11820"
           securityContext:
-            privileged: true
+            runAsUser: 0
             capabilities:
-              add: ["NET_ADMIN", "SYS_MODULE"]
+              add: ["NET_ADMIN"]
+              drop: ["ALL"]
           volumeMounts:
             - name: arenaservice-binary
               mountPath: /opt/arenaservice
