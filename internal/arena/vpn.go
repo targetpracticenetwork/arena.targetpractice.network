@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -20,6 +21,8 @@ type VPNManager interface {
 	CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error)
 	RemovePeer(pubKey string) error
 	GetPeerStatus(pubKey string) (*PeerStatus, error)
+	RemovePeerByIP(vpnIP string) error
+	GetPeerStatusByIP(vpnIP string) (*PeerStatus, error)
 	CheckDevice() error
 	GetServerPublicKey() (string, error)
 	GetServerEndpoint() (string, error)
@@ -249,4 +252,91 @@ func (w *WGManager) GetVPNSubnet() string {
 // GetServiceCIDR returns the Kubernetes service network CIDR.
 func (w *WGManager) GetServiceCIDR() string {
 	return w.ServiceCIDR
+}
+
+// RemovePeerByIP removes a peer by finding it using its VPN IP address.
+func (w *WGManager) RemovePeerByIP(vpnIP string) error {
+	log.Printf("🗑️ Removing WireGuard peer by VPN IP - Interface: %s, VPN IP: %s", w.InterfaceName, vpnIP)
+
+	// Parse the VPN IP to extract just the IP address (without CIDR)
+	targetIP := vpnIP
+	if strings.Contains(vpnIP, "/") {
+		targetIP = strings.Split(vpnIP, "/")[0]
+	}
+
+	client, err := wgctrl.New()
+	if err != nil {
+		log.Printf("❌ Failed to create WireGuard client: %v", err)
+		return err
+	}
+	defer client.Close()
+
+	device, err := client.Device(w.InterfaceName)
+	if err != nil {
+		log.Printf("❌ Failed to get WireGuard device %s: %v", w.InterfaceName, err)
+		return err
+	}
+
+	// Find the peer with the matching VPN IP
+	for _, peer := range device.Peers {
+		for _, allowedIP := range peer.AllowedIPs {
+			// Extract IP from allowed IP (remove CIDR if present)
+			peerIP := allowedIP.IP.String()
+			if peerIP == targetIP {
+				log.Printf("✅ Found peer with VPN IP %s, public key: %s", targetIP, peer.PublicKey.String())
+				return w.RemovePeer(peer.PublicKey.String())
+			}
+		}
+	}
+
+	log.Printf("⚠️ No peer found with VPN IP: %s", targetIP)
+	return fmt.Errorf("no peer found with VPN IP: %s", targetIP)
+}
+
+// GetPeerStatusByIP returns information about the peer with the given VPN IP address.
+func (w *WGManager) GetPeerStatusByIP(vpnIP string) (*PeerStatus, error) {
+	// Parse the VPN IP to extract just the IP address (without CIDR)
+	targetIP := vpnIP
+	if strings.Contains(vpnIP, "/") {
+		targetIP = strings.Split(vpnIP, "/")[0]
+	}
+
+	client, err := wgctrl.New()
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	device, err := client.Device(w.InterfaceName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Find the peer with the matching VPN IP
+	for _, peer := range device.Peers {
+		for _, allowedIP := range peer.AllowedIPs {
+			// Extract IP from allowed IP (remove CIDR if present)
+			peerIP := allowedIP.IP.String()
+			if peerIP == targetIP {
+				allowedIPs := make([]string, len(peer.AllowedIPs))
+				for i, ipnet := range peer.AllowedIPs {
+					allowedIPs[i] = ipnet.String()
+				}
+				status := PeerStatus{
+					PublicKey:     peer.PublicKey.String(),
+					Endpoint:      "",
+					AllowedIps:    allowedIPs,
+					LastHandshake: peer.LastHandshakeTime.Unix(),
+					RxBytes:       int64(peer.ReceiveBytes),
+					TxBytes:       int64(peer.TransmitBytes),
+				}
+				if peer.Endpoint != nil {
+					status.Endpoint = peer.Endpoint.String()
+				}
+				return &status, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no peer found with VPN IP: %s", targetIP)
 }

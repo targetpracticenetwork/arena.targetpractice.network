@@ -1,8 +1,6 @@
 package arena
 
 import (
-	"crypto/sha256"
-	"encoding/base32"
 	"fmt"
 	"log"
 	"net"
@@ -13,8 +11,8 @@ import (
 // ArenaManager orchestrates the full lifecycle of a user arena, coordinating K8s and VPN managers.
 type ArenaManager interface {
 	CreateArena(publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error)
-	DestroyArena(publicKey string) error
-	GetArenaStatus(publicKey string) (*ArenaStatus, error)
+	DestroyArena(vpnIP string) error
+	GetArenaStatus(vpnIP string) (*ArenaStatus, error)
 }
 
 // arenaManager is a concrete implementation of ArenaManager.
@@ -31,30 +29,43 @@ func NewArenaManager(k8sMgr K8sManager, vpnMgr VPNManager) ArenaManager {
 	}
 }
 
-func pubKeyToNamespace(pubKey string) string {
-	// Hash the public key for consistent length and collision resistance
-	hash := sha256.Sum256([]byte(pubKey))
-
-	// Use base32 encoding (URL-safe by default, no padding issues)
-	b32 := base32.StdEncoding.EncodeToString(hash[:15])     // 24 chars
-	b32 = strings.ToLower(strings.ReplaceAll(b32, "=", "")) // Remove padding, lowercase
-
-	// Truncate to fit K8s namespace limit (63 characters total)
-	maxLength := 63 - len("arena-") // Reserve space for "arena-" prefix
-	if len(b32) > maxLength {
-		b32 = b32[:maxLength]
+// vpnIPToNamespace creates a DNS-compliant namespace name from a VPN IP address.
+// Example: 10.6.1.23 becomes arena-10-6-1-23
+func vpnIPToNamespace(vpnIP string) string {
+	// Parse the VPN IP to extract just the IP address (without CIDR)
+	ip := vpnIP
+	if strings.Contains(vpnIP, "/") {
+		ip = strings.Split(vpnIP, "/")[0]
 	}
 
-	return "arena-" + b32
+	// Replace dots with dashes to make it DNS-compliant
+	ipPart := strings.ReplaceAll(ip, ".", "-")
+
+	// Create namespace name with arena- prefix
+	namespaceName := "arena-" + ipPart
+
+	// Ensure it meets Kubernetes namespace requirements (max 63 characters, DNS-compliant)
+	if len(namespaceName) > 63 {
+		// This should rarely happen with IPv4 addresses, but truncate if needed
+		namespaceName = namespaceName[:63]
+	}
+
+	return namespaceName
 }
 
 // CreateArena provisions a new arena for the user: creates K8s resources and a VPN peer.
 func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error) {
-	ns := pubKeyToNamespace(publicKey)
+	ns := vpnIPToNamespace(vpnIP)
 	log.Printf("🏗️ Creating arena - Namespace: %s, Challenge: %s", ns, challengeName)
 
+
+	_, vpnIPNet, err := net.ParseCIDR(vpnIP)
+	if err != nil {
+		log.Printf("❌ Invalid VPN IP format: %s", vpnIP)
+		return nil, fmt.Errorf("invalid VPN IP: %s", vpnIP)
+	}
+
 	labels := map[string]string{
-		"arena/vpn-ip":     vpnIP,
 		"arena/challenge":  challengeName,
 		"arena/created-at": time.Now().UTC().Format("20060102T150405Z"),
 		"arena/namespace":  ns,
@@ -119,13 +130,6 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 		return nil, fmt.Errorf("failed to apply network policy: %w", err)
 	}
 	log.Printf("✅ Network policy applied with %d service IPs", len(serviceIPs))
-
-	// 5. Parse user's VPN IP for proper peer configuration
-	_, vpnIPNet, err := net.ParseCIDR(vpnIP)
-	if err != nil {
-		log.Printf("❌ Invalid VPN IP format: %s", vpnIP)
-		return nil, fmt.Errorf("invalid VPN IP: %s", vpnIP)
-	}
 
 	// 6. Build allowed destination IPs (service IPs only)
 	var allowedDestinations []net.IPNet
@@ -211,13 +215,13 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 }
 
 // DestroyArena tears down all resources for the user's arena.
-func (a *arenaManager) DestroyArena(publicKey string) error {
-	ns := pubKeyToNamespace(publicKey)
+func (a *arenaManager) DestroyArena(vpnIP string) error {
+	ns := vpnIPToNamespace(vpnIP)
 	log.Printf("🗑️ Destroying arena - Namespace: %s", ns)
 
-	log.Printf("🔐 Removing VPN peer for public key: %s", publicKey)
-	if err := a.vpn.RemovePeer(publicKey); err != nil {
-		log.Printf("❌ VPN peer removal failed for public key %s: %v", publicKey, err)
+	log.Printf("🔐 Removing VPN peer for VPN IP: %s", vpnIP)
+	if err := a.vpn.RemovePeerByIP(vpnIP); err != nil {
+		log.Printf("❌ VPN peer removal failed for VPN IP %s: %v", vpnIP, err)
 		return fmt.Errorf("failed to remove VPN peer: %w", err)
 	}
 	log.Printf("✅ VPN peer removed")
@@ -234,15 +238,15 @@ func (a *arenaManager) DestroyArena(publicKey string) error {
 }
 
 // GetArenaStatus returns the current status of the user's arena.
-func (a *arenaManager) GetArenaStatus(publicKey string) (*ArenaStatus, error) {
-	ns := pubKeyToNamespace(publicKey)
+func (a *arenaManager) GetArenaStatus(vpnIP string) (*ArenaStatus, error) {
+	ns := vpnIPToNamespace(vpnIP)
 	log.Printf("📊 Getting arena status - Namespace: %s", ns)
 
 	// Get VPN peer status
-	log.Printf("🔐 Getting VPN peer status for public key: %s", publicKey)
-	vpnStatus, err := a.vpn.GetPeerStatus(publicKey)
+	log.Printf("🔐 Getting VPN peer status for VPN IP: %s", vpnIP)
+	vpnStatus, err := a.vpn.GetPeerStatusByIP(vpnIP)
 	if err != nil {
-		log.Printf("❌ VPN peer status failed for public key %s: %v", publicKey, err)
+		log.Printf("❌ VPN peer status failed for VPN IP %s: %v", vpnIP, err)
 		return nil, fmt.Errorf("failed to get VPN peer status: %w", err)
 	}
 	log.Printf("✅ VPN peer status retrieved")
@@ -299,7 +303,7 @@ func (a *arenaManager) GetArenaStatus(publicKey string) (*ArenaStatus, error) {
 	}
 
 	status := &ArenaStatus{
-		PublicKey: publicKey,
+		PublicKey: vpnStatus.PublicKey, // Use the actual public key from VPN status
 		Namespace: ns,
 		VpnStatus: vpnStatus,
 		K8SStatus: k8sStatus,

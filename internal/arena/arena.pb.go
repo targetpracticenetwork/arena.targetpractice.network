@@ -146,7 +146,7 @@ func (x *CreateArenaResponse) GetError() string {
 // Request to destroy an arena
 type DestroyArenaRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKey     string                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	VpnIp         string                 `protobuf:"bytes,1,opt,name=vpn_ip,json=vpnIp,proto3" json:"vpn_ip,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -181,9 +181,9 @@ func (*DestroyArenaRequest) Descriptor() ([]byte, []int) {
 	return file_api_arena_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *DestroyArenaRequest) GetPublicKey() string {
+func (x *DestroyArenaRequest) GetVpnIp() string {
 	if x != nil {
-		return x.PublicKey
+		return x.VpnIp
 	}
 	return ""
 }
@@ -244,7 +244,7 @@ func (x *DestroyArenaResponse) GetError() string {
 // Request to get arena status
 type GetArenaStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	PublicKey     string                 `protobuf:"bytes,1,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	VpnIp         string                 `protobuf:"bytes,1,opt,name=vpn_ip,json=vpnIp,proto3" json:"vpn_ip,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -279,9 +279,9 @@ func (*GetArenaStatusRequest) Descriptor() ([]byte, []int) {
 	return file_api_arena_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *GetArenaStatusRequest) GetPublicKey() string {
+func (x *GetArenaStatusRequest) GetVpnIp() string {
 	if x != nil {
-		return x.PublicKey
+		return x.VpnIp
 	}
 	return ""
 }
@@ -1197,16 +1197,14 @@ const file_api_arena_proto_rawDesc = "" +
 	"\x0echallenge_spec\x18\x04 \x01(\tR\rchallengeSpec\"W\n" +
 	"\x13CreateArenaResponse\x12*\n" +
 	"\x06config\x18\x01 \x01(\v2\x12.arena.ArenaConfigR\x06config\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"4\n" +
-	"\x13DestroyArenaRequest\x12\x1d\n" +
-	"\n" +
-	"public_key\x18\x01 \x01(\tR\tpublicKey\"F\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\",\n" +
+	"\x13DestroyArenaRequest\x12\x15\n" +
+	"\x06vpn_ip\x18\x01 \x01(\tR\x05vpnIp\"F\n" +
 	"\x14DestroyArenaResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"6\n" +
-	"\x15GetArenaStatusRequest\x12\x1d\n" +
-	"\n" +
-	"public_key\x18\x01 \x01(\tR\tpublicKey\"Z\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\".\n" +
+	"\x15GetArenaStatusRequest\x12\x15\n" +
+	"\x06vpn_ip\x18\x01 \x01(\tR\x05vpnIp\"Z\n" +
 	"\x16GetArenaStatusResponse\x12*\n" +
 	"\x06status\x18\x01 \x01(\v2\x12.arena.ArenaStatusR\x06status\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"\xce\x02\n" +

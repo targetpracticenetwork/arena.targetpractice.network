@@ -94,6 +94,14 @@ func (m *mockVPNManager) GetPeerStatus(pubKey string) (*PeerStatus, error) {
 	m.GetPeerStatusCalled = true
 	return m.PeerStatus, m.GetPeerStatusErr
 }
+func (m *mockVPNManager) RemovePeerByIP(vpnIP string) error {
+	m.RemovePeerCalled = true
+	return m.RemovePeerErr
+}
+func (m *mockVPNManager) GetPeerStatusByIP(vpnIP string) (*PeerStatus, error) {
+	m.GetPeerStatusCalled = true
+	return m.PeerStatus, m.GetPeerStatusErr
+}
 func (m *mockVPNManager) CheckDevice() error { return nil }
 func (m *mockVPNManager) GetServerPublicKey() (string, error) {
 	if m.ServerPublicKey == "" {
@@ -179,9 +187,12 @@ func TestArenaManager_CreateArena_K8sError(t *testing.T) {
 
 func TestArenaManager_DestroyArena_Success(t *testing.T) {
 	k8s := &mockK8sManager{}
-	vpn := &mockVPNManager{}
+	vpn := &mockVPNManager{PeerStatus: &PeerStatus{
+		PublicKey:  "pk",
+		AllowedIps: []string{"10.0.0.2/32"},
+	}}
 	mgr := NewArenaManager(k8s, vpn)
-	err := mgr.DestroyArena("pk")
+	err := mgr.DestroyArena("10.0.0.2/32")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -194,7 +205,7 @@ func TestArenaManager_DestroyArena_VPNError(t *testing.T) {
 	k8s := &mockK8sManager{}
 	vpn := &mockVPNManager{RemovePeerErr: errors.New("fail")}
 	mgr := NewArenaManager(k8s, vpn)
-	err := mgr.DestroyArena("pk")
+	err := mgr.DestroyArena("10.0.0.2/32")
 	if err == nil || err.Error() != "failed to remove VPN peer: fail" {
 		t.Errorf("expected vpn error, got %v", err)
 	}
@@ -208,9 +219,12 @@ func TestArenaManager_GetArenaStatus_Success(t *testing.T) {
 			Phase: "Active",
 		},
 	}
-	vpn := &mockVPNManager{PeerStatus: &PeerStatus{PublicKey: "pk"}}
+	vpn := &mockVPNManager{PeerStatus: &PeerStatus{
+		PublicKey:  "pk",
+		AllowedIps: []string{"10.0.0.2/32"},
+	}}
 	mgr := NewArenaManager(k8s, vpn)
-	status, err := mgr.GetArenaStatus("pk")
+	status, err := mgr.GetArenaStatus("10.0.0.2/32")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -226,8 +240,8 @@ func TestArenaManager_GetArenaStatus_Success(t *testing.T) {
 	if status.GetK8SStatus() == nil {
 		t.Error("expected k8s_status in arena status")
 	}
-	// The namespace is computed from the public key hash
-	expectedNamespace := "arena-5myqfjwllbtwlua7vuzeki7m" // pubKeyToNamespace("pk")
+	// The namespace is computed from the VPN IP address
+	expectedNamespace := "arena-10-0-0-2" // vpnIPToNamespace("10.0.0.2/32")
 	if status.GetNamespace() != expectedNamespace {
 		t.Errorf("expected namespace %s, got %v", expectedNamespace, status.GetNamespace())
 	}
@@ -239,7 +253,7 @@ func TestArenaManager_GetArenaStatus_Success(t *testing.T) {
 func TestArenaManager_GetArenaStatus_VPNError(t *testing.T) {
 	vpn := &mockVPNManager{GetPeerStatusErr: errors.New("fail")}
 	mgr := NewArenaManager(&mockK8sManager{}, vpn)
-	_, err := mgr.GetArenaStatus("pk")
+	_, err := mgr.GetArenaStatus("10.0.0.2/32")
 	if err == nil || err.Error() != "failed to get VPN peer status: fail" {
 		t.Errorf("expected error, got %v", err)
 	}
@@ -247,9 +261,12 @@ func TestArenaManager_GetArenaStatus_VPNError(t *testing.T) {
 
 func TestArenaManager_GetArenaStatus_K8sError(t *testing.T) {
 	k8s := &mockK8sManager{GetNamespaceStatusErr: errors.New("fail")}
-	vpn := &mockVPNManager{PeerStatus: &PeerStatus{PublicKey: "pk"}}
+	vpn := &mockVPNManager{PeerStatus: &PeerStatus{
+		PublicKey:  "pk",
+		AllowedIps: []string{"10.0.0.2/32"},
+	}}
 	mgr := NewArenaManager(k8s, vpn)
-	_, err := mgr.GetArenaStatus("pk")
+	_, err := mgr.GetArenaStatus("10.0.0.2/32")
 	if err == nil || err.Error() != "failed to get namespace status: fail" {
 		t.Errorf("expected error, got %v", err)
 	}

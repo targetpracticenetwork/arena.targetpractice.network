@@ -178,18 +178,18 @@ func generateWireGuardConfig(config *arena.ArenaConfig, privateKey string) {
 
 func handleDestroy(ctx context.Context, client arena.ArenaServiceClient, args []string) {
 	fs := flag.NewFlagSet("destroy", flag.ExitOnError)
-	publicKey := fs.String("public-key", "", "Public key of the arena to destroy (required)")
+	vpnIP := fs.String("vpn-ip", "", "VPN IP address of the arena to destroy (required)")
 
 	fs.Parse(args)
 
-	if *publicKey == "" {
-		fmt.Println("Error: public-key is required")
+	if *vpnIP == "" {
+		fmt.Println("Error: vpn-ip is required")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
 	req := &arena.DestroyArenaRequest{
-		PublicKey: *publicKey,
+		VpnIp: *vpnIP,
 	}
 
 	resp, err := client.DestroyArena(ctx, req)
@@ -207,18 +207,18 @@ func handleDestroy(ctx context.Context, client arena.ArenaServiceClient, args []
 
 func handleStatus(ctx context.Context, client arena.ArenaServiceClient, args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	publicKey := fs.String("public-key", "", "Public key of the arena to check (required)")
+	vpnIP := fs.String("vpn-ip", "", "VPN IP address of the arena to check (required)")
 
 	fs.Parse(args)
 
-	if *publicKey == "" {
-		fmt.Println("Error: public-key is required")
+	if *vpnIP == "" {
+		fmt.Println("Error: vpn-ip is required")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
 	req := &arena.GetArenaStatusRequest{
-		PublicKey: *publicKey,
+		VpnIp: *vpnIP,
 	}
 
 	resp, err := client.GetArenaStatus(ctx, req)
@@ -232,7 +232,8 @@ func handleStatus(ctx context.Context, client arena.ArenaServiceClient, args []s
 	}
 
 	status := resp.Status
-	fmt.Printf("Arena Status for %s:\n", status.PublicKey)
+	fmt.Printf("Arena Status for VPN IP %s:\n", *vpnIP)
+	fmt.Printf("Public Key: %s\n", status.PublicKey)
 	fmt.Printf("Namespace: %s\n", status.Namespace)
 	fmt.Printf("Healthy: %t\n", status.Healthy)
 
@@ -272,20 +273,20 @@ func handleStatus(ctx context.Context, client arena.ArenaServiceClient, args []s
 
 func handleConfig(ctx context.Context, client arena.ArenaServiceClient, args []string) {
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
-	publicKey := fs.String("public-key", "", "Public key of the arena (required)")
+	vpnIP := fs.String("vpn-ip", "", "VPN IP address of the arena (required)")
 	outputFile := fs.String("output", "", "Output file for WireGuard config (optional)")
 
 	fs.Parse(args)
 
-	if *publicKey == "" {
-		fmt.Println("Error: public-key is required")
+	if *vpnIP == "" {
+		fmt.Println("Error: vpn-ip is required")
 		fs.PrintDefaults()
 		os.Exit(1)
 	}
 
 	// Get arena status to retrieve configuration
 	req := &arena.GetArenaStatusRequest{
-		PublicKey: *publicKey,
+		VpnIp: *vpnIP,
 	}
 
 	resp, err := client.GetArenaStatus(ctx, req)
@@ -303,13 +304,13 @@ func handleConfig(ctx context.Context, client arena.ArenaServiceClient, args []s
 	// or retrieve it from a separate endpoint
 	config := &arena.ArenaConfig{
 		PublicKey:            resp.Status.PublicKey,
-		AllowedIp:            "10.0.0.100/32",     // This would come from the original creation
+		AllowedIp:            *vpnIP,              // Use the provided VPN IP
 		ServerPublicKey:      "server-public-key", // This would come from the original creation
 		ServerEndpoint:       "arena-dev.targetpractice.network:11820",
 		AllowedIpsForRouting: []string{"10.0.0.0/24"},
 	}
 
-	fmt.Printf("Generating WireGuard configuration for arena: %s\n", *publicKey)
+	fmt.Printf("Generating WireGuard configuration for VPN IP: %s\n", *vpnIP)
 	fmt.Println()
 
 	if *outputFile != "" {
@@ -340,10 +341,10 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Examples:")
 	fmt.Println("  arenaclient create -vpn-ip=10.0.0.2/32 -challenge-spec='...'")
-	fmt.Println("  arenaclient destroy -public-key=abc123")
-	fmt.Println("  arenaclient status -public-key=abc123")
-	fmt.Println("  arenaclient config -public-key=abc123")
+	fmt.Println("  arenaclient destroy -vpn-ip=10.0.0.2")
+	fmt.Println("  arenaclient status -vpn-ip=10.0.0.2")
+	fmt.Println("  arenaclient config -vpn-ip=10.0.0.2")
 	fmt.Println()
 	fmt.Println("Insecure Mode:")
-	fmt.Println("  ARENA_INSECURE_DISABLE_MTLS=true arenaclient status -public-key=abc123")
+	fmt.Println("  ARENA_INSECURE_DISABLE_MTLS=true arenaclient status -vpn-ip=10.0.0.2")
 }

@@ -26,7 +26,7 @@ message CreateArenaResponse {
 
 // Request to destroy an arena
 message DestroyArenaRequest {
-  string public_key = 1;
+  string vpn_ip = 1;
 }
 
 // Response for destroy operation
@@ -37,7 +37,7 @@ message DestroyArenaResponse {
 
 // Request to get arena status
 message GetArenaStatusRequest {
-  string public_key = 1;
+  string vpn_ip = 1;
 }
 
 // Response with arena status

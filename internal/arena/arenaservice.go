@@ -33,24 +33,24 @@ func (s *ArenaServiceServerImpl) CreateArena(ctx context.Context, req *CreateAre
 }
 
 func (s *ArenaServiceServerImpl) DestroyArena(ctx context.Context, req *DestroyArenaRequest) (*DestroyArenaResponse, error) {
-	log.Printf("🗑️ DestroyArena request received - PublicKey: %s", req.PublicKey)
+	log.Printf("🗑️ DestroyArena request received - VPN IP: %s", req.VpnIp)
 
-	err := s.Manager.DestroyArena(req.PublicKey)
+	err := s.Manager.DestroyArena(req.VpnIp)
 	if err != nil {
-		log.Printf("❌ DestroyArena failed - PublicKey: %s, Error: %v", req.PublicKey, err)
+		log.Printf("❌ DestroyArena failed - VPN IP: %s, Error: %v", req.VpnIp, err)
 		return &DestroyArenaResponse{Success: false, Error: err.Error()}, nil
 	}
 
-	log.Printf("✅ DestroyArena successful - PublicKey: %s", req.PublicKey)
+	log.Printf("✅ DestroyArena successful - VPN IP: %s", req.VpnIp)
 	return &DestroyArenaResponse{Success: true}, nil
 }
 
 func (s *ArenaServiceServerImpl) GetArenaStatus(ctx context.Context, req *GetArenaStatusRequest) (*GetArenaStatusResponse, error) {
-	log.Printf("📊 GetArenaStatus request received - PublicKey: %s", req.PublicKey)
+	log.Printf("📊 GetArenaStatus request received - VPN IP: %s", req.VpnIp)
 
-	status, err := s.Manager.GetArenaStatus(req.PublicKey)
+	status, err := s.Manager.GetArenaStatus(req.VpnIp)
 	if err != nil {
-		log.Printf("❌ GetArenaStatus failed - PublicKey: %s, Error: %v", req.PublicKey, err)
+		log.Printf("❌ GetArenaStatus failed - VPN IP: %s, Error: %v", req.VpnIp, err)
 		return &GetArenaStatusResponse{Error: err.Error()}, nil
 	}
 
@@ -63,8 +63,8 @@ func (s *ArenaServiceServerImpl) GetArenaStatus(ctx context.Context, req *GetAre
 	if !status.GetHealthy() {
 		healthy = "❌"
 	}
-	log.Printf("📊 GetArenaStatus successful - PublicKey: %s, Namespace: %s, Healthy: %s, Pods: %d, Services: %d",
-		req.PublicKey, status.Namespace, healthy, status.GetK8SStatus().GetPodCount(), status.GetK8SStatus().GetServiceCount())
+	log.Printf("📊 GetArenaStatus successful - VPN IP: %s, Namespace: %s, Healthy: %s, Pods: %d, Services: %d",
+		req.VpnIp, status.Namespace, healthy, status.GetK8SStatus().GetPodCount(), status.GetK8SStatus().GetServiceCount())
 
 	// Optionally, include health information in the error field if unhealthy
 	if !status.GetHealthy() && len(status.GetErrors()) > 0 {
