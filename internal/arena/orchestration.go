@@ -53,15 +53,11 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	ns := pubKeyToNamespace(publicKey)
 	log.Printf("🏗️ Creating arena - Namespace: %s, Challenge: %s", ns, challengeName)
 
-	// Create URL-safe public key hash for labels
-	hash := sha256.Sum256([]byte(publicKey))
-	keyHash := base32.StdEncoding.EncodeToString(hash[:8]) // 16 chars, no padding
-	keyHash = strings.ToLower(strings.ReplaceAll(keyHash, "=", ""))
-
 	labels := map[string]string{
-		"arena/publickey":  keyHash,
+		"arena/vpn-ip":     vpnIP,
 		"arena/challenge":  challengeName,
 		"arena/created-at": time.Now().UTC().Format("20060102T150405Z"),
+		"arena/namespace":  ns,
 	}
 
 	// 1. Validate the challenge spec before parsing/creating resources
