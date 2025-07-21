@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -38,14 +37,18 @@ type WGManager struct {
 	ServerEndpoint  string
 	VPNSubnet       string // VPN subnet CIDR
 	ServiceCIDR     string // Kubernetes service network CIDR
+	Port            int    // WireGuard server port
+	ServerHost      string // WireGuard server hostname/IP
 }
 
 // NewWGManager creates a new WGManager and initializes server configuration at startup.
-func NewWGManager(interfaceName string, vpnSubnet string, serviceCIDR string) (*WGManager, error) {
+func NewWGManager(interfaceName string, vpnSubnet string, serviceCIDR string, port int, serverHost string) (*WGManager, error) {
 	mgr := &WGManager{
 		InterfaceName: interfaceName,
 		VPNSubnet:     vpnSubnet,
 		ServiceCIDR:   serviceCIDR,
+		Port:          port,
+		ServerHost:    serverHost,
 	}
 
 	// Initialize server configuration at startup
@@ -72,18 +75,12 @@ func (w *WGManager) initializeServerConfig() error {
 	// Cache server public key
 	w.ServerPublicKey = device.PublicKey.String()
 
-	// Get server hostname/IP from environment variable
-	serverHost := os.Getenv("WIREGUARD_SERVER_HOST")
-	if serverHost == "" {
-		serverHost = "localhost" // fallback for development
-	}
-
-	// Cache server endpoint with port
-	port := 11820 // default port
+	// Use the port from initialization, with device listen port as fallback
+	port := w.Port
 	if device.ListenPort != 0 {
 		port = int(device.ListenPort)
 	}
-	w.ServerEndpoint = fmt.Sprintf("%s:%d", serverHost, port)
+	w.ServerEndpoint = fmt.Sprintf("%s:%d", w.ServerHost, port)
 
 	log.Printf("🔧 WireGuard server config initialized - Public Key: %s, Endpoint: %s",
 		w.ServerPublicKey, w.ServerEndpoint)

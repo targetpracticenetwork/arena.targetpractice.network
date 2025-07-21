@@ -42,6 +42,8 @@ The ArenaService can be configured using the following environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WIREGUARD_INTERFACE` | `wg0` | WireGuard interface name |
+| `WIREGUARD_PORT` | `11820` | WireGuard server port |
+| `WIREGUARD_SERVER_HOST` | `localhost` | WireGuard server hostname/IP for client configuration |
 | `GRPC_LISTEN_ADDR` | `:443` | gRPC server listen address |
 | `ARENA_INSECURE_DISABLE_MTLS` | `false` | Disable mTLS for development/testing |
 | `VPN_SUBNET` | `10.0.0.0/24` | VPN subnet CIDR for user IP allocation |

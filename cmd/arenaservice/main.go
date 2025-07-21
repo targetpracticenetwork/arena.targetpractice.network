@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 
 	"arena/internal/arena"
 
@@ -20,9 +21,21 @@ func getEnvWithDefault(key, defaultValue string) string {
 	return defaultValue
 }
 
+// getEnvIntWithDefault returns the environment variable value as int or the default if not set
+func getEnvIntWithDefault(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		if intValue, err := strconv.Atoi(value); err == nil {
+			return intValue
+		}
+	}
+	return defaultValue
+}
+
 func main() {
 	// Load configuration from environment variables (with defaults)
 	wgInterface := getEnvWithDefault("WIREGUARD_INTERFACE", "wg0")
+	wgPort := getEnvIntWithDefault("WIREGUARD_PORT", 11820)
+	wgServerHost := getEnvWithDefault("WIREGUARD_SERVER_HOST", "localhost")
 	grpcAddr := getEnvWithDefault("GRPC_LISTEN_ADDR", ":443")
 	insecureMode := getEnvWithDefault("ARENA_INSECURE_DISABLE_MTLS", "false") == "true"
 
@@ -35,10 +48,12 @@ func main() {
 	log.Printf("  VPN Subnet: %s", vpnSubnet)
 	log.Printf("  Cluster CIDR: %s", clusterCIDR)
 	log.Printf("  Service CIDR: %s", serviceCIDR)
+	log.Printf("  WireGuard Port: %d", wgPort)
+	log.Printf("  WireGuard Server Host: %s", wgServerHost)
 
 	// Initialize managers with CIDR configuration
 	k8sManager := arena.NewK8sManager(clusterCIDR, serviceCIDR)
-	vpnManager, err := arena.NewWGManager(wgInterface, vpnSubnet, serviceCIDR)
+	vpnManager, err := arena.NewWGManager(wgInterface, vpnSubnet, serviceCIDR, wgPort, wgServerHost)
 	if err != nil {
 		log.Fatalf("Failed to initialize WireGuard manager: %v", err)
 	}
