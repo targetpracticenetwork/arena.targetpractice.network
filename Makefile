@@ -42,6 +42,10 @@ k3s-logs:
 k3s-deploy: build-static
 	chmod +x scripts/deploy.sh
 	./scripts/deploy.sh
+	kubectl rollout restart deployment/arenaservice -n control-plane
+	@echo "🔄 Restarting deployment to pick up new binary..."
+	kubectl wait --for=condition=available --timeout=120s deployment/arenaservice -n control-plane
+	@echo "✅ ArenaService deployed and restarted successfully!"
 
 # Restart ArenaService in k3s
 k3s-restart: build-static

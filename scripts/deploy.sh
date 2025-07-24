@@ -17,11 +17,7 @@ if ! kubectl get nodes > /dev/null 2>&1; then
     exit 1
 fi
 
-# Build static binary
-echo "🔨 Building static binary..."
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -a -installsuffix cgo -o bin/arenaservice-static ./cmd/arenaservice
-
-# Create bin directory if it doesn't exist
+# Ensure bin directory exists
 mkdir -p bin
 
 # Deploy to k3s
