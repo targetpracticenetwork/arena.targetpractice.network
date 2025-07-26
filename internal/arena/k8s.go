@@ -20,8 +20,22 @@ import (
 
 // ChallengeSpec defines the structure of a challenge specification
 type ChallengeSpec struct {
-	Pods     []PodSpec     `yaml:"pods"`
-	Services []ServiceSpec `yaml:"services,omitempty"`
+	ConfigMaps []ConfigMapSpec `yaml:"configMaps,omitempty"`
+	Pods       []PodSpec       `yaml:"pods"`
+	Services   []ServiceSpec   `yaml:"services,omitempty"`
+}
+
+// ConfigMapSpec defines a ConfigMap in the challenge
+type ConfigMapSpec struct {
+	Name   string            `yaml:"name"`
+	Data   map[string]string `yaml:"data"`
+	Labels map[string]string `yaml:"labels,omitempty"`
+}
+
+// VolumeSpec defines a volume in the challenge
+type VolumeSpec struct {
+	Name      string `yaml:"name"`
+	ConfigMap string `yaml:"configMap,omitempty"`
 }
 
 // PodSpec defines a pod in the challenge
@@ -30,6 +44,8 @@ type PodSpec struct {
 	Image     string            `yaml:"image"`
 	Ports     []PortSpec        `yaml:"ports,omitempty"`
 	Env       []EnvVar          `yaml:"env,omitempty"`
+	EnvFrom   []string          `yaml:"envFrom,omitempty"`
+	Volumes   []VolumeSpec      `yaml:"volumes,omitempty"`
 	Resources ResourceSpec      `yaml:"resources,omitempty"`
 	Labels    map[string]string `yaml:"labels,omitempty"`
 }
@@ -67,6 +83,8 @@ type ResourceSpec struct {
 type K8sManager interface {
 	CreateNamespace(name string, labels map[string]string) error
 	DeleteNamespace(name string) error
+	CreateConfigMaps(namespace string, configMaps []*v1.ConfigMap) error
+	DeleteConfigMaps(namespace string, configMapNames []string) error
 	CreatePods(namespace string, pods []*v1.Pod) error
 	DeletePods(namespace string, podNames []string) error
 	CreateServices(namespace string, services []*v1.Service) error
@@ -147,6 +165,26 @@ func (k *k8sManager) DeleteNamespace(name string) error {
 		return err
 	}
 	log.Printf("✅ Namespace deletion initiated: %s", name)
+	return nil
+}
+
+func (k *k8sManager) CreateConfigMaps(namespace string, configMaps []*v1.ConfigMap) error {
+	for _, cm := range configMaps {
+		_, err := k.clientset.CoreV1().ConfigMaps(namespace).Create(context.Background(), cm, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to create config map %s: %w", cm.Name, err)
+		}
+	}
+	return nil
+}
+
+func (k *k8sManager) DeleteConfigMaps(namespace string, configMapNames []string) error {
+	for _, name := range configMapNames {
+		err := k.clientset.CoreV1().ConfigMaps(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to delete config map %s: %w", name, err)
+		}
+	}
 	return nil
 }
 
@@ -414,13 +452,18 @@ func (k *k8sManager) ValidateSpec(challengeSpec string) error {
 	if err := yaml.Unmarshal([]byte(challengeSpec), &spec); err != nil {
 		return fmt.Errorf("spec is not valid YAML: %w", err)
 	}
-	pods, ok := spec["pods"]
-	if !ok {
+
+	// Check that 'pods' field exists
+	podsField, exists := spec["pods"]
+	if !exists {
 		return fmt.Errorf("spec must contain a 'pods' field")
 	}
-	if _, ok := pods.([]interface{}); !ok {
+
+	// Check that 'pods' field is a list
+	if _, ok := podsField.([]interface{}); !ok {
 		return fmt.Errorf("'pods' field must be a list")
 	}
+
 	return nil
 }
 
@@ -433,7 +476,30 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 		log.Printf("❌ Failed to parse challenge spec: %v", err)
 		return nil, fmt.Errorf("failed to parse challenge spec: %w", err)
 	}
-	log.Printf("✅ Challenge spec parsed - Pods: %d, Services: %d", len(spec.Pods), len(spec.Services))
+	log.Printf("✅ Challenge spec parsed - ConfigMaps: %d, Pods: %d, Services: %d", len(spec.ConfigMaps), len(spec.Pods), len(spec.Services))
+
+	// Create config maps first
+	var configMaps []*v1.ConfigMap
+	for _, cmSpec := range spec.ConfigMaps {
+		log.Printf("📦 Creating config map: %s", cmSpec.Name)
+		cm, err := k.createConfigMapFromSpec(namespace, cmSpec)
+		if err != nil {
+			log.Printf("❌ Failed to create config map %s: %v", cmSpec.Name, err)
+			return nil, fmt.Errorf("failed to create config map %s: %w", cmSpec.Name, err)
+		}
+		configMaps = append(configMaps, cm)
+		log.Printf("✅ Config map spec created: %s", cmSpec.Name)
+	}
+
+	// Create the config maps
+	if len(configMaps) > 0 {
+		log.Printf("🚀 Creating %d config maps in namespace: %s", len(configMaps), namespace)
+		if err := k.CreateConfigMaps(namespace, configMaps); err != nil {
+			log.Printf("❌ Failed to create config maps: %v", err)
+			return nil, fmt.Errorf("failed to create config maps: %w", err)
+		}
+		log.Printf("✅ All config maps created successfully")
+	}
 
 	// Create pods first
 	var pods []*v1.Pod
@@ -506,6 +572,26 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 	return endpoints, nil
 }
 
+func (k *k8sManager) createConfigMapFromSpec(namespace string, spec ConfigMapSpec) (*v1.ConfigMap, error) {
+	// Set default labels if none provided
+	labels := spec.Labels
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels["app"] = spec.Name
+
+	cm := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      spec.Name,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Data: spec.Data,
+	}
+
+	return cm, nil
+}
+
 func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec) (*v1.Pod, error) {
 	// Convert port specs to container ports
 	var containerPorts []v1.ContainerPort
@@ -528,6 +614,44 @@ func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec) (*v1.Pod,
 			Name:  env.Name,
 			Value: env.Value,
 		})
+	}
+
+	// Convert envFrom ConfigMap references
+	var envFromSources []v1.EnvFromSource
+	for _, configMapName := range spec.EnvFrom {
+		envFromSources = append(envFromSources, v1.EnvFromSource{
+			ConfigMapRef: &v1.ConfigMapEnvSource{
+				LocalObjectReference: v1.LocalObjectReference{
+					Name: configMapName,
+				},
+			},
+		})
+	}
+
+	// Convert volume specs
+	var volumes []v1.Volume
+	var volumeMounts []v1.VolumeMount
+	for _, volSpec := range spec.Volumes {
+		if volSpec.ConfigMap != "" {
+			// Create volume for ConfigMap
+			volumes = append(volumes, v1.Volume{
+				Name: volSpec.Name,
+				VolumeSource: v1.VolumeSource{
+					ConfigMap: &v1.ConfigMapVolumeSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: volSpec.ConfigMap,
+						},
+					},
+				},
+			})
+
+			// Create volume mount with convention: /config/<configmap-name>
+			volumeMounts = append(volumeMounts, v1.VolumeMount{
+				Name:      volSpec.Name,
+				MountPath: fmt.Sprintf("/config/%s", volSpec.ConfigMap),
+				ReadOnly:  true,
+			})
+		}
 	}
 
 	// Convert resource specs
@@ -563,13 +687,16 @@ func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec) (*v1.Pod,
 		Spec: v1.PodSpec{
 			Containers: []v1.Container{
 				{
-					Name:      spec.Name,
-					Image:     spec.Image,
-					Ports:     containerPorts,
-					Env:       envVars,
-					Resources: resourceRequirements,
+					Name:         spec.Name,
+					Image:        spec.Image,
+					Ports:        containerPorts,
+					Env:          envVars,
+					EnvFrom:      envFromSources,
+					VolumeMounts: volumeMounts,
+					Resources:    resourceRequirements,
 				},
 			},
+			Volumes:       volumes,
 			RestartPolicy: v1.RestartPolicyAlways,
 		},
 	}

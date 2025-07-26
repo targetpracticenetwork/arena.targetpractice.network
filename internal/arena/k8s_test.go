@@ -13,6 +13,11 @@ type mockK8sManagerForTesting struct {
 	k8sManager
 }
 
+func (m *mockK8sManagerForTesting) CreateConfigMaps(namespace string, configMaps []*v1.ConfigMap) error {
+	// Mock implementation - just return success
+	return nil
+}
+
 func (m *mockK8sManagerForTesting) CreatePods(namespace string, pods []*v1.Pod) error {
 	// Mock implementation - just return success
 	return nil
@@ -339,5 +344,337 @@ func TestK8sManager_CreateServiceFromSpec(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestK8sManager_CreateConfigMapFromSpec(t *testing.T) {
+	mgr := &k8sManager{}
+
+	tests := []struct {
+		name    string
+		spec    ConfigMapSpec
+		wantErr bool
+	}{
+		{
+			name: "basic configmap",
+			spec: ConfigMapSpec{
+				Name: "test-config",
+				Data: map[string]string{
+					"config.yaml": "key: value",
+					"app.conf":    "debug=true",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "configmap with labels",
+			spec: ConfigMapSpec{
+				Name: "webapp-template",
+				Data: map[string]string{
+					"index.html": "<h1>{{ flag }}</h1>",
+					"style.css":  "body { font-family: Inter; }",
+				},
+				Labels: map[string]string{
+					"app":  "webapp",
+					"type": "template",
+				},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cm, err := mgr.createConfigMapFromSpec("test-namespace", tt.spec)
+			if tt.wantErr && err == nil {
+				t.Errorf("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !tt.wantErr && cm == nil {
+				t.Error("expected configmap, got nil")
+			}
+			if !tt.wantErr && cm != nil {
+				if cm.Name != tt.spec.Name {
+					t.Errorf("expected configmap name %s, got %s", tt.spec.Name, cm.Name)
+				}
+				if cm.Namespace != "test-namespace" {
+					t.Errorf("expected namespace test-namespace, got %s", cm.Namespace)
+				}
+				if len(cm.Data) != len(tt.spec.Data) {
+					t.Errorf("expected %d data entries, got %d", len(tt.spec.Data), len(cm.Data))
+				}
+				for key, value := range tt.spec.Data {
+					if cm.Data[key] != value {
+						t.Errorf("expected data[%s]=%s, got %s", key, value, cm.Data[key])
+					}
+				}
+				// Check default app label is added
+				if cm.Labels["app"] != tt.spec.Name {
+					t.Errorf("expected app label %s, got %s", tt.spec.Name, cm.Labels["app"])
+				}
+			}
+		})
+	}
+}
+
+func TestK8sManager_CreatePodWithConfigMapSupport(t *testing.T) {
+	mgr := &k8sManager{}
+
+	tests := []struct {
+		name    string
+		spec    PodSpec
+		wantErr bool
+		check   func(*testing.T, *v1.Pod)
+	}{
+		{
+			name: "pod with configmap volume",
+			spec: PodSpec{
+				Name:  "webapp",
+				Image: "nginx",
+				Volumes: []VolumeSpec{
+					{Name: "config-vol", ConfigMap: "webapp-config"},
+				},
+			},
+			wantErr: false,
+			check: func(t *testing.T, pod *v1.Pod) {
+				if len(pod.Spec.Volumes) != 1 {
+					t.Errorf("expected 1 volume, got %d", len(pod.Spec.Volumes))
+				}
+				if pod.Spec.Volumes[0].Name != "config-vol" {
+					t.Errorf("expected volume name config-vol, got %s", pod.Spec.Volumes[0].Name)
+				}
+				if pod.Spec.Volumes[0].VolumeSource.ConfigMap.Name != "webapp-config" {
+					t.Errorf("expected configmap name webapp-config, got %s", pod.Spec.Volumes[0].VolumeSource.ConfigMap.Name)
+				}
+				if len(pod.Spec.Containers[0].VolumeMounts) != 1 {
+					t.Errorf("expected 1 volume mount, got %d", len(pod.Spec.Containers[0].VolumeMounts))
+				}
+				expectedMountPath := "/config/webapp-config"
+				if pod.Spec.Containers[0].VolumeMounts[0].MountPath != expectedMountPath {
+					t.Errorf("expected mount path %s, got %s", expectedMountPath, pod.Spec.Containers[0].VolumeMounts[0].MountPath)
+				}
+			},
+		},
+		{
+			name: "pod with envFrom configmap",
+			spec: PodSpec{
+				Name:    "app",
+				Image:   "myapp:latest",
+				EnvFrom: []string{"app-config", "secrets-config"},
+			},
+			wantErr: false,
+			check: func(t *testing.T, pod *v1.Pod) {
+				if len(pod.Spec.Containers[0].EnvFrom) != 2 {
+					t.Errorf("expected 2 envFrom sources, got %d", len(pod.Spec.Containers[0].EnvFrom))
+				}
+				if pod.Spec.Containers[0].EnvFrom[0].ConfigMapRef.Name != "app-config" {
+					t.Errorf("expected configmap name app-config, got %s", pod.Spec.Containers[0].EnvFrom[0].ConfigMapRef.Name)
+				}
+				if pod.Spec.Containers[0].EnvFrom[1].ConfigMapRef.Name != "secrets-config" {
+					t.Errorf("expected configmap name secrets-config, got %s", pod.Spec.Containers[0].EnvFrom[1].ConfigMapRef.Name)
+				}
+			},
+		},
+		{
+			name: "pod with both volume and envFrom",
+			spec: PodSpec{
+				Name:    "fullapp",
+				Image:   "nginx",
+				EnvFrom: []string{"app-env"},
+				Volumes: []VolumeSpec{
+					{Name: "templates", ConfigMap: "webapp-template"},
+				},
+			},
+			wantErr: false,
+			check: func(t *testing.T, pod *v1.Pod) {
+				// Check envFrom
+				if len(pod.Spec.Containers[0].EnvFrom) != 1 {
+					t.Errorf("expected 1 envFrom source, got %d", len(pod.Spec.Containers[0].EnvFrom))
+				}
+				// Check volumes
+				if len(pod.Spec.Volumes) != 1 {
+					t.Errorf("expected 1 volume, got %d", len(pod.Spec.Volumes))
+				}
+				if len(pod.Spec.Containers[0].VolumeMounts) != 1 {
+					t.Errorf("expected 1 volume mount, got %d", len(pod.Spec.Containers[0].VolumeMounts))
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod, err := mgr.createPodFromSpec("test-namespace", tt.spec)
+			if tt.wantErr && err == nil {
+				t.Errorf("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !tt.wantErr && pod == nil {
+				t.Error("expected pod, got nil")
+			}
+			if !tt.wantErr && tt.check != nil {
+				tt.check(t, pod)
+			}
+		})
+	}
+}
+
+func TestK8sManager_CompleteConfigMapWorkflow(t *testing.T) {
+	spec := `
+configMaps:
+  - name: webapp-template
+    data:
+      index.html: |
+        <h1>{{ flag }}</h1>
+        <p>Welcome to the challenge!</p>
+      style.css: |
+        body { font-family: Inter, sans-serif; }
+    labels:
+      app: webapp
+      type: template
+  - name: app-config
+    data:
+      DATABASE_URL: "postgresql://localhost:5432/db"
+      DEBUG: "true"
+      API_KEY: "secret123"
+
+pods:
+  - name: webapp
+    image: nginx:alpine
+    ports:
+      - port: 80
+        targetPort: 80
+    envFrom:
+      - app-config
+    volumes:
+      - name: templates
+        configMap: webapp-template
+    labels:
+      app: webapp
+
+services:
+  - name: webapp-service
+    type: ClusterIP
+    ports:
+      - port: 80
+        targetPort: 80
+    selector:
+      app: webapp
+`
+
+	// Parse the YAML
+	var challengeSpec ChallengeSpec
+	err := yaml.Unmarshal([]byte(spec), &challengeSpec)
+	if err != nil {
+		t.Fatalf("failed to parse challenge spec: %v", err)
+	}
+
+	// Verify ConfigMaps
+	if len(challengeSpec.ConfigMaps) != 2 {
+		t.Errorf("expected 2 configmaps, got %d", len(challengeSpec.ConfigMaps))
+	}
+
+	// Check first ConfigMap
+	webappTemplate := challengeSpec.ConfigMaps[0]
+	if webappTemplate.Name != "webapp-template" {
+		t.Errorf("expected configmap name webapp-template, got %s", webappTemplate.Name)
+	}
+	if len(webappTemplate.Data) != 2 {
+		t.Errorf("expected 2 data entries, got %d", len(webappTemplate.Data))
+	}
+	if !strings.Contains(webappTemplate.Data["index.html"], "{{ flag }}") {
+		t.Error("expected index.html to contain {{ flag }}")
+	}
+	if !strings.Contains(webappTemplate.Data["style.css"], "Inter") {
+		t.Error("expected style.css to contain Inter font")
+	}
+
+	// Check second ConfigMap
+	appConfig := challengeSpec.ConfigMaps[1]
+	if appConfig.Name != "app-config" {
+		t.Errorf("expected configmap name app-config, got %s", appConfig.Name)
+	}
+	if appConfig.Data["DEBUG"] != "true" {
+		t.Errorf("expected DEBUG=true, got %s", appConfig.Data["DEBUG"])
+	}
+
+	// Verify Pod configuration
+	if len(challengeSpec.Pods) != 1 {
+		t.Errorf("expected 1 pod, got %d", len(challengeSpec.Pods))
+	}
+
+	pod := challengeSpec.Pods[0]
+	if len(pod.EnvFrom) != 1 {
+		t.Errorf("expected 1 envFrom, got %d", len(pod.EnvFrom))
+	}
+	if pod.EnvFrom[0] != "app-config" {
+		t.Errorf("expected envFrom app-config, got %s", pod.EnvFrom[0])
+	}
+	if len(pod.Volumes) != 1 {
+		t.Errorf("expected 1 volume, got %d", len(pod.Volumes))
+	}
+	if pod.Volumes[0].ConfigMap != "webapp-template" {
+		t.Errorf("expected volume configmap webapp-template, got %s", pod.Volumes[0].ConfigMap)
+	}
+
+	// Test creating Kubernetes objects
+	mgr := &k8sManager{}
+
+	// Test ConfigMap creation
+	for _, cmSpec := range challengeSpec.ConfigMaps {
+		cm, err := mgr.createConfigMapFromSpec("test-namespace", cmSpec)
+		if err != nil {
+			t.Errorf("failed to create configmap %s: %v", cmSpec.Name, err)
+		}
+		if cm.Name != cmSpec.Name {
+			t.Errorf("expected configmap name %s, got %s", cmSpec.Name, cm.Name)
+		}
+	}
+
+	// Test Pod creation with ConfigMap references
+	for _, podSpec := range challengeSpec.Pods {
+		pod, err := mgr.createPodFromSpec("test-namespace", podSpec)
+		if err != nil {
+			t.Errorf("failed to create pod %s: %v", podSpec.Name, err)
+		}
+		
+		// Verify envFrom is correctly configured
+		if len(pod.Spec.Containers[0].EnvFrom) != len(podSpec.EnvFrom) {
+			t.Errorf("expected %d envFrom sources, got %d", len(podSpec.EnvFrom), len(pod.Spec.Containers[0].EnvFrom))
+		}
+		
+		// Verify volumes are correctly configured
+		if len(pod.Spec.Volumes) != len(podSpec.Volumes) {
+			t.Errorf("expected %d volumes, got %d", len(podSpec.Volumes), len(pod.Spec.Volumes))
+		}
+		
+		// Verify volume mounts are correctly configured
+		if len(pod.Spec.Containers[0].VolumeMounts) != len(podSpec.Volumes) {
+			t.Errorf("expected %d volume mounts, got %d", len(podSpec.Volumes), len(pod.Spec.Containers[0].VolumeMounts))
+		}
+		
+		// Check mount path convention
+		if len(pod.Spec.Containers[0].VolumeMounts) > 0 {
+			expectedPath := "/config/webapp-template"
+			actualPath := pod.Spec.Containers[0].VolumeMounts[0].MountPath
+			if actualPath != expectedPath {
+				t.Errorf("expected mount path %s, got %s", expectedPath, actualPath)
+			}
+		}
+	}
+
+	// Test Service creation (should work the same as before)
+	for _, svcSpec := range challengeSpec.Services {
+		svc, err := mgr.createServiceFromSpec("test-namespace", svcSpec)
+		if err != nil {
+			t.Errorf("failed to create service %s: %v", svcSpec.Name, err)
+		}
+		if svc.Name != svcSpec.Name {
+			t.Errorf("expected service name %s, got %s", svcSpec.Name, svc.Name)
+		}
 	}
 }

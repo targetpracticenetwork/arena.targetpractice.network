@@ -34,6 +34,8 @@ func (m *mockK8sManager) DeleteNamespace(name string) error {
 	m.DeleteNamespaceCalled = true
 	return m.DeleteNamespaceErr
 }
+func (m *mockK8sManager) CreateConfigMaps(namespace string, configMaps []*v1.ConfigMap) error { return nil }
+func (m *mockK8sManager) DeleteConfigMaps(namespace string, configMapNames []string) error  { return nil }
 func (m *mockK8sManager) CreatePods(namespace string, pods []*v1.Pod) error             { return nil }
 func (m *mockK8sManager) DeletePods(namespace string, podNames []string) error          { return nil }
 func (m *mockK8sManager) CreateServices(namespace string, services []*v1.Service) error { return nil }
