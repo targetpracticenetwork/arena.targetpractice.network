@@ -249,7 +249,7 @@ func TestK8sManager_CreatePodFromSpec(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pod, err := mgr.createPodFromSpec("test-namespace", tt.spec)
+			pod, err := mgr.createPodFromSpec("test-namespace", tt.spec, nil)
 			if tt.wantErr && err == nil {
 				t.Errorf("expected error, got nil")
 			}
@@ -506,7 +506,7 @@ func TestK8sManager_CreatePodWithConfigMapSupport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pod, err := mgr.createPodFromSpec("test-namespace", tt.spec)
+			pod, err := mgr.createPodFromSpec("test-namespace", tt.spec, nil)
 			if tt.wantErr && err == nil {
 				t.Errorf("expected error, got nil")
 			}
@@ -637,7 +637,7 @@ services:
 
 	// Test Pod creation with ConfigMap references
 	for _, podSpec := range challengeSpec.Pods {
-		pod, err := mgr.createPodFromSpec("test-namespace", podSpec)
+		pod, err := mgr.createPodFromSpec("test-namespace", podSpec, nil)
 		if err != nil {
 			t.Errorf("failed to create pod %s: %v", podSpec.Name, err)
 		}
@@ -675,6 +675,333 @@ services:
 		}
 		if svc.Name != svcSpec.Name {
 			t.Errorf("expected service name %s, got %s", svcSpec.Name, svc.Name)
+		}
+	}
+}
+
+func TestK8sManager_PrivateRegistrySupport(t *testing.T) {
+	mgr := &k8sManager{}
+
+	tests := []struct {
+		name     string
+		spec     PodSpec
+		registry *RegistrySpec
+		wantErr  bool
+		check    func(*testing.T, *v1.Pod, *RegistrySpec)
+	}{
+		{
+			name: "pod with private registry image",
+			spec: PodSpec{
+				Name:  "private-app",
+				Image: "registry.example.com/myorg/myapp:v1.2.3",
+			},
+			registry: &RegistrySpec{
+				CredentialsSecret: "my-registry-creds",
+				URL:               "registry.example.com",
+			},
+			wantErr: false,
+			check: func(t *testing.T, pod *v1.Pod, registry *RegistrySpec) {
+				// Should have imagePullSecrets
+				if len(pod.Spec.ImagePullSecrets) != 1 {
+					t.Errorf("expected 1 imagePullSecret, got %d", len(pod.Spec.ImagePullSecrets))
+				}
+				if pod.Spec.ImagePullSecrets[0].Name != registry.CredentialsSecret {
+					t.Errorf("expected imagePullSecret %s, got %s", registry.CredentialsSecret, pod.Spec.ImagePullSecrets[0].Name)
+				}
+				// Should use IfNotPresent policy (since images are pre-warmed)
+				if pod.Spec.Containers[0].ImagePullPolicy != v1.PullIfNotPresent {
+					t.Errorf("expected ImagePullPolicy IfNotPresent, got %v", pod.Spec.Containers[0].ImagePullPolicy)
+				}
+				// Image should remain normalized
+				expectedImage := "registry.example.com/myorg/myapp:v1.2.3"
+				if pod.Spec.Containers[0].Image != expectedImage {
+					t.Errorf("expected image %s, got %s", expectedImage, pod.Spec.Containers[0].Image)
+				}
+			},
+		},
+		{
+			name: "pod with relative private registry image",
+			spec: PodSpec{
+				Name:  "relative-app",
+				Image: "myorg/myapp:latest",
+			},
+			registry: &RegistrySpec{
+				CredentialsSecret: "my-registry-creds",
+				URL:               "registry.example.com",
+			},
+			wantErr: false,
+			check: func(t *testing.T, pod *v1.Pod, registry *RegistrySpec) {
+				// Should have imagePullSecrets
+				if len(pod.Spec.ImagePullSecrets) != 1 {
+					t.Errorf("expected 1 imagePullSecret, got %d", len(pod.Spec.ImagePullSecrets))
+				}
+				// Image should be normalized with registry URL
+				expectedImage := "registry.example.com/myorg/myapp:latest"
+				if pod.Spec.Containers[0].Image != expectedImage {
+					t.Errorf("expected image %s, got %s", expectedImage, pod.Spec.Containers[0].Image)
+				}
+			},
+		},
+		{
+			name: "pod with normalized private registry image",
+			spec: PodSpec{
+				Name:  "normalized-app",
+				Image: "nginx:latest",
+			},
+			registry: &RegistrySpec{
+				CredentialsSecret: "my-registry-creds",
+				URL:               "registry.example.com",
+			},
+			wantErr: false,
+			check: func(t *testing.T, pod *v1.Pod, registry *RegistrySpec) {
+				// Should have imagePullSecrets since all images are private
+				if len(pod.Spec.ImagePullSecrets) != 1 {
+					t.Errorf("expected 1 imagePullSecret, got %d", len(pod.Spec.ImagePullSecrets))
+				}
+				// Should use IfNotPresent policy
+				if pod.Spec.Containers[0].ImagePullPolicy != v1.PullIfNotPresent {
+					t.Errorf("expected ImagePullPolicy IfNotPresent, got %v", pod.Spec.Containers[0].ImagePullPolicy)
+				}
+				// Image should be normalized with registry URL
+				expectedImage := "registry.example.com/nginx:latest"
+				if pod.Spec.Containers[0].Image != expectedImage {
+					t.Errorf("expected image %s, got %s", expectedImage, pod.Spec.Containers[0].Image)
+				}
+			},
+		},
+		{
+			name: "pod without registry config",
+			spec: PodSpec{
+				Name:  "no-registry-app",
+				Image: "registry.example.com/myorg/myapp:v1.0.0",
+			},
+			registry: nil,
+			wantErr:  false,
+			check: func(t *testing.T, pod *v1.Pod, registry *RegistrySpec) {
+				// Should NOT have imagePullSecrets without registry config
+				if len(pod.Spec.ImagePullSecrets) != 0 {
+					t.Errorf("expected 0 imagePullSecrets without registry config, got %d", len(pod.Spec.ImagePullSecrets))
+				}
+				// Image should remain unchanged
+				expectedImage := "registry.example.com/myorg/myapp:v1.0.0"
+				if pod.Spec.Containers[0].Image != expectedImage {
+					t.Errorf("expected image %s, got %s", expectedImage, pod.Spec.Containers[0].Image)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pod, err := mgr.createPodFromSpec("test-namespace", tt.spec, tt.registry)
+			if tt.wantErr && err == nil {
+				t.Errorf("expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !tt.wantErr && pod == nil {
+				t.Error("expected pod, got nil")
+			}
+			if !tt.wantErr && tt.check != nil {
+				tt.check(t, pod, tt.registry)
+			}
+		})
+	}
+}
+
+func TestK8sManager_ImageDetection(t *testing.T) {
+	mgr := &k8sManager{}
+
+	tests := []struct {
+		name           string
+		image          string
+		registryURL    string
+		expectedPrivate bool
+	}{
+		{
+			name:           "Any image with registry URL",
+			image:          "nginx",
+			registryURL:    "registry.example.com",
+			expectedPrivate: true,
+		},
+		{
+			name:           "Full registry path",
+			image:          "registry.example.com/myorg/myapp:v1.0.0",
+			registryURL:    "registry.example.com",
+			expectedPrivate: true,
+		},
+		{
+			name:           "Relative image path",
+			image:          "myorg/myapp:latest",
+			registryURL:    "registry.example.com",
+			expectedPrivate: true,
+		},
+		{
+			name:           "Image without registry URL",
+			image:          "myapp:latest",
+			registryURL:    "",
+			expectedPrivate: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			isPrivate := mgr.isPrivateRegistryImage(tt.image, tt.registryURL)
+			
+			if isPrivate != tt.expectedPrivate {
+				t.Errorf("expected private=%v, got private=%v for image %s with registryURL %s", 
+					tt.expectedPrivate, isPrivate, tt.image, tt.registryURL)
+			}
+		})
+	}
+}
+
+func TestK8sManager_ImageNormalization(t *testing.T) {
+	mgr := &k8sManager{}
+
+	tests := []struct {
+		name         string
+		image        string
+		registryURL  string
+		expectedImage string
+	}{
+		{
+			name:          "Simple image normalized with registry URL",
+			image:         "nginx:latest",
+			registryURL:   "registry.example.com",
+			expectedImage: "registry.example.com/nginx:latest",
+		},
+		{
+			name:          "Full registry path unchanged",
+			image:         "registry.example.com/myorg/myapp:v1.0.0",
+			registryURL:   "registry.example.com",
+			expectedImage: "registry.example.com/myorg/myapp:v1.0.0",
+		},
+		{
+			name:          "Relative image normalized",
+			image:         "myorg/myapp:latest",
+			registryURL:   "registry.example.com",
+			expectedImage: "registry.example.com/myorg/myapp:latest",
+		},
+		{
+			name:          "No registry URL provided",
+			image:         "myorg/myapp:latest",
+			registryURL:   "",
+			expectedImage: "myorg/myapp:latest",
+		},
+		{
+			name:          "Different registry not normalized",
+			image:         "other.registry.com/myorg/myapp:v1.0.0",
+			registryURL:   "registry.example.com",
+			expectedImage: "other.registry.com/myorg/myapp:v1.0.0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			normalized := mgr.normalizeImage(tt.image, tt.registryURL)
+			if normalized != tt.expectedImage {
+				t.Errorf("expected normalized image %s, got %s", tt.expectedImage, normalized)
+			}
+		})
+	}
+}
+
+
+
+func TestK8sManager_CompletePrivateRegistryWorkflow(t *testing.T) {
+	spec := `
+registry:
+  credentialsSecret: "my-registry-creds"
+  url: "registry.example.com"
+
+pods:
+  - name: webapp
+    image: registry.example.com/myorg/webapp:v2.1.0
+    ports:
+      - port: 80
+        targetPort: 8080
+    labels:
+      app: webapp
+  - name: database
+    image: myorg/database:latest
+    ports:
+      - port: 5432
+        targetPort: 5432
+    labels:
+      app: database
+  - name: cache
+    image: redis:alpine
+    ports:
+      - port: 6379
+        targetPort: 6379
+    labels:
+      app: cache
+
+services:
+  - name: webapp-service
+    type: ClusterIP
+    ports:
+      - port: 80
+        targetPort: 8080
+    selector:
+      app: webapp
+`
+
+	// Parse the YAML
+	var challengeSpec ChallengeSpec
+	err := yaml.Unmarshal([]byte(spec), &challengeSpec)
+	if err != nil {
+		t.Fatalf("failed to parse challenge spec: %v", err)
+	}
+
+	// Verify registry configuration
+	if challengeSpec.Registry == nil {
+		t.Fatal("expected registry configuration, got nil")
+	}
+	if challengeSpec.Registry.CredentialsSecret != "my-registry-creds" {
+		t.Errorf("expected registry secret my-registry-creds, got %s", challengeSpec.Registry.CredentialsSecret)
+	}
+	if challengeSpec.Registry.URL != "registry.example.com" {
+		t.Errorf("expected registry URL registry.example.com, got %s", challengeSpec.Registry.URL)
+	}
+
+	mgr := &k8sManager{}
+
+	// Test private image detection (no longer extracting, just validating registry config)
+	if challengeSpec.Registry == nil {
+		t.Fatal("expected registry configuration, got nil")
+	}
+
+	// Test Pod creation with private registry
+	for _, podSpec := range challengeSpec.Pods {
+		pod, err := mgr.createPodFromSpec("test-namespace", podSpec, challengeSpec.Registry)
+		if err != nil {
+			t.Errorf("failed to create pod %s: %v", podSpec.Name, err)
+			continue
+		}
+
+		// Check that all pods should have imagePullSecrets (since all images are private)
+		normalizedImage := mgr.normalizeImage(podSpec.Image, challengeSpec.Registry.URL)
+		
+		// Should have imagePullSecrets
+		if len(pod.Spec.ImagePullSecrets) != 1 {
+			t.Errorf("pod %s: expected 1 imagePullSecret, got %d", podSpec.Name, len(pod.Spec.ImagePullSecrets))
+		} else if pod.Spec.ImagePullSecrets[0].Name != challengeSpec.Registry.CredentialsSecret {
+			t.Errorf("pod %s: expected imagePullSecret %s, got %s", 
+				podSpec.Name, challengeSpec.Registry.CredentialsSecret, pod.Spec.ImagePullSecrets[0].Name)
+		}
+		
+		// Should use normalized image
+		if pod.Spec.Containers[0].Image != normalizedImage {
+			t.Errorf("pod %s: expected image %s, got %s", podSpec.Name, normalizedImage, pod.Spec.Containers[0].Image)
+		}
+		
+		// All pods should use IfNotPresent policy
+		if pod.Spec.Containers[0].ImagePullPolicy != v1.PullIfNotPresent {
+			t.Errorf("pod %s: expected ImagePullPolicy IfNotPresent, got %v", 
+				podSpec.Name, pod.Spec.Containers[0].ImagePullPolicy)
 		}
 	}
 }

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -20,9 +22,16 @@ import (
 
 // ChallengeSpec defines the structure of a challenge specification
 type ChallengeSpec struct {
+	Registry   *RegistrySpec   `yaml:"registry,omitempty"`
 	ConfigMaps []ConfigMapSpec `yaml:"configMaps,omitempty"`
 	Pods       []PodSpec       `yaml:"pods"`
 	Services   []ServiceSpec   `yaml:"services,omitempty"`
+}
+
+// RegistrySpec defines private registry configuration
+type RegistrySpec struct {
+	CredentialsSecret string `yaml:"credentialsSecret"`
+	URL               string `yaml:"url,omitempty"`
 }
 
 // ConfigMapSpec defines a ConfigMap in the challenge
@@ -478,6 +487,22 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 	}
 	log.Printf("✅ Challenge spec parsed - ConfigMaps: %d, Pods: %d, Services: %d", len(spec.ConfigMaps), len(spec.Pods), len(spec.Services))
 
+	// Validate registry configuration if needed
+	if spec.Registry != nil {
+		if err := k.validateRegistryCredentials("control-plane", spec.Registry.CredentialsSecret); err != nil {
+			log.Printf("❌ Registry credentials validation failed: %v", err)
+			return nil, fmt.Errorf("registry credentials validation failed: %w", err)
+		}
+
+		// Copy registry secret to arena namespace
+		log.Printf("🔐 Copying registry secret to arena namespace: %s", namespace)
+		if err := k.copyRegistrySecret("control-plane", namespace, spec.Registry.CredentialsSecret); err != nil {
+			log.Printf("❌ Failed to copy registry secret: %v", err)
+			return nil, fmt.Errorf("failed to copy registry secret: %w", err)
+		}
+		log.Printf("✅ Registry secret copied to arena namespace")
+	}
+
 	// Create config maps first
 	var configMaps []*v1.ConfigMap
 	for _, cmSpec := range spec.ConfigMaps {
@@ -505,7 +530,7 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 	var pods []*v1.Pod
 	for _, podSpec := range spec.Pods {
 		log.Printf("📦 Creating pod: %s with image: %s", podSpec.Name, podSpec.Image)
-		pod, err := k.createPodFromSpec(namespace, podSpec)
+		pod, err := k.createPodFromSpec(namespace, podSpec, spec.Registry)
 		if err != nil {
 			log.Printf("❌ Failed to create pod %s: %v", podSpec.Name, err)
 			return nil, fmt.Errorf("failed to create pod %s: %w", podSpec.Name, err)
@@ -592,7 +617,7 @@ func (k *k8sManager) createConfigMapFromSpec(namespace string, spec ConfigMapSpe
 	return cm, nil
 }
 
-func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec) (*v1.Pod, error) {
+func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec, registry *RegistrySpec) (*v1.Pod, error) {
 	// Convert port specs to container ports
 	var containerPorts []v1.ContainerPort
 	for _, port := range spec.Ports {
@@ -678,6 +703,24 @@ func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec) (*v1.Pod,
 	}
 	labels["app"] = spec.Name
 
+	// Determine image and pull policy
+	imageToUse := spec.Image
+	imagePullPolicy := v1.PullIfNotPresent
+	var imagePullSecrets []v1.LocalObjectReference
+
+	if registry != nil {
+		// Check if this image should be treated as private
+		if k.isPrivateRegistryImage(spec.Image, registry.URL) {
+			// Normalize the image for the private registry
+			imageToUse = k.normalizeImage(spec.Image, registry.URL)
+			imagePullSecrets = []v1.LocalObjectReference{
+				{Name: registry.CredentialsSecret},
+			}
+			imagePullPolicy = v1.PullIfNotPresent
+		}
+		// If not private, use the original image as-is
+	}
+
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      spec.Name,
@@ -685,15 +728,17 @@ func (k *k8sManager) createPodFromSpec(namespace string, spec PodSpec) (*v1.Pod,
 			Labels:    labels,
 		},
 		Spec: v1.PodSpec{
+			ImagePullSecrets: imagePullSecrets,
 			Containers: []v1.Container{
 				{
-					Name:         spec.Name,
-					Image:        spec.Image,
-					Ports:        containerPorts,
-					Env:          envVars,
-					EnvFrom:      envFromSources,
-					VolumeMounts: volumeMounts,
-					Resources:    resourceRequirements,
+					Name:            spec.Name,
+					Image:           imageToUse,
+					ImagePullPolicy: imagePullPolicy,
+					Ports:           containerPorts,
+					Env:             envVars,
+					EnvFrom:         envFromSources,
+					VolumeMounts:    volumeMounts,
+					Resources:       resourceRequirements,
 				},
 			},
 			Volumes:       volumes,
@@ -748,3 +793,115 @@ func (k *k8sManager) createServiceFromSpec(namespace string, spec ServiceSpec) (
 
 	return svc, nil
 }
+
+// validateRegistryCredentials checks if the specified registry secret exists in the namespace
+func (k *k8sManager) validateRegistryCredentials(namespace, secretName string) error {
+	log.Printf("🔐 Validating registry credentials secret: %s in namespace: %s", secretName, namespace)
+	
+	_, err := k.clientset.CoreV1().Secrets(namespace).Get(context.Background(), secretName, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return fmt.Errorf("registry credentials secret %s not found in namespace %s", secretName, namespace)
+		}
+		return fmt.Errorf("failed to get registry credentials secret %s: %w", secretName, err)
+	}
+	
+	log.Printf("✅ Registry credentials secret validated: %s", secretName)
+	return nil
+}
+
+// copyRegistrySecret copies a registry secret from source namespace to target namespace
+func (k *k8sManager) copyRegistrySecret(sourceNamespace, targetNamespace, secretName string) error {
+	log.Printf("🔐 Copying registry secret %s from %s to %s", secretName, sourceNamespace, targetNamespace)
+	
+	// Get the secret from source namespace
+	sourceSecret, err := k.clientset.CoreV1().Secrets(sourceNamespace).Get(context.Background(), secretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get source secret %s from namespace %s: %w", secretName, sourceNamespace, err)
+	}
+	
+	// Create a new secret object for the target namespace
+	targetSecret := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: targetNamespace,
+		},
+		Type: sourceSecret.Type,
+		Data: sourceSecret.Data,
+	}
+	
+	// Create the secret in target namespace
+	_, err = k.clientset.CoreV1().Secrets(targetNamespace).Create(context.Background(), targetSecret, metav1.CreateOptions{})
+	if err != nil {
+		if errors.IsAlreadyExists(err) {
+			log.Printf("✅ Registry secret already exists in target namespace: %s", targetNamespace)
+			return nil
+		}
+		return fmt.Errorf("failed to create secret %s in namespace %s: %w", secretName, targetNamespace, err)
+	}
+	
+	log.Printf("✅ Registry secret copied successfully to namespace: %s", targetNamespace)
+	return nil
+}
+
+
+
+// isPrivateRegistryImage determines if an image is from a private registry
+func (k *k8sManager) isPrivateRegistryImage(image, registryURL string) bool {
+	// If no registry URL is specified, assume all images are private
+	if registryURL == "" {
+		return true
+	}
+	
+	// Check if the image belongs to this registry
+	// If image already has the registry URL prefix, it's from this registry
+	if strings.HasPrefix(image, registryURL+"/") {
+		return true
+	}
+	
+	// If image has a different registry host (contains . or :), it's not from this registry
+	if strings.Contains(image, "/") {
+		parts := strings.SplitN(image, "/", 2)
+		firstPart := parts[0]
+		if strings.Contains(firstPart, ".") || strings.Contains(firstPart, ":") {
+			return false
+		}
+	}
+	
+	// If image is a simple name (no /), it could be from this registry
+	// But we should be more conservative and only treat it as private if it's explicitly configured
+	return false
+}
+
+// isDockerHubImage determines if an image is from Docker Hub
+func (k *k8sManager) isDockerHubImage(image string) bool {
+	// Docker Hub images are typically simple names or have docker.io prefix
+	// But since we're using a private registry, we'll be conservative
+	return false
+}
+
+// normalizeImage converts relative image paths to full paths with registry URL
+func (k *k8sManager) normalizeImage(image, registryURL string) string {
+	if registryURL == "" {
+		return image
+	}
+	
+	// If image already has the registry URL prefix, don't modify it
+	if strings.HasPrefix(image, registryURL+"/") {
+		return image
+	}
+	
+	// If image has a different registry host (contains . or :), don't normalize
+	if strings.Contains(image, "/") {
+		parts := strings.SplitN(image, "/", 2)
+		firstPart := parts[0]
+		if strings.Contains(firstPart, ".") || strings.Contains(firstPart, ":") {
+			return image
+		}
+	}
+	
+	// Normalize relative image path by prepending registry URL
+	return registryURL + "/" + image
+}
+
+

@@ -109,10 +109,13 @@ func (w *WGManager) CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinatio
 		return nil, err
 	}
 
-	// Only allow the peer's VPN IP as source (server-side source validation)
+	// Allow the peer's VPN IP as source and add service IPs for routing
+	allowedIPs := []net.IPNet{vpnIP}
+	allowedIPs = append(allowedIPs, allowedDestinations...)
+	
 	peerCfg := wgtypes.PeerConfig{
 		PublicKey:         key,
-		AllowedIPs:        []net.IPNet{vpnIP},
+		AllowedIPs:        allowedIPs,
 		ReplaceAllowedIPs: true,
 	}
 

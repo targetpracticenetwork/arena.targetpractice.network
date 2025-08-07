@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-registry
+  namespace: arena-192-168-100-4
+spec:
+  imagePullSecrets:
+  - name: api-repoflow-secret
+  containers:
+  - name: test
+    image: api.repoflow.io/hello-2751/targets-targetprac/targets-targetprac/securebank:latest
+    command: ["/bin/true"]
+  restartPolicy: Never 

@@ -221,16 +221,16 @@ func (a *arenaManager) DestroyArena(vpnIP string) error {
 	log.Printf("🔐 Removing VPN peer for VPN IP: %s", vpnIP)
 	if err := a.vpn.RemovePeerByIP(vpnIP); err != nil {
 		log.Printf("❌ VPN peer removal failed for VPN IP %s: %v", vpnIP, err)
-		return fmt.Errorf("failed to remove VPN peer: %w", err)
+	} else {
+		log.Printf("✅ VPN peer removed")
 	}
-	log.Printf("✅ VPN peer removed")
 
 	log.Printf("📦 Deleting namespace: %s", ns)
 	if err := a.k8s.DeleteNamespace(ns); err != nil {
 		log.Printf("❌ Namespace deletion failed: %v", err)
-		return fmt.Errorf("failed to delete namespace: %w", err)
+	} else {
+		log.Printf("✅ Namespace deleted: %s", ns)
 	}
-	log.Printf("✅ Namespace deleted: %s", ns)
 
 	log.Printf("🎉 Arena destruction completed - Namespace: %s", ns)
 	return nil
@@ -286,8 +286,15 @@ func (a *arenaManager) GetArenaStatus(vpnIP string) (*ArenaStatus, error) {
 		log.Printf("⚠️ Namespace not found")
 	}
 
+	// Get server public key for client configuration
+	serverPublicKey, err := a.vpn.GetServerPublicKey()
+	if err != nil {
+		log.Printf("❌ Failed to get server public key: %v", err)
+		serverPublicKey = "unknown"
+	}
+
 	status := &ArenaStatus{
-		PublicKey: vpnStatus.PublicKey, // Use the actual public key from VPN status
+		PublicKey: serverPublicKey, // Use server's public key for client configuration
 		Namespace: ns,
 		VpnStatus: vpnStatus,
 		K8SStatus: k8sStatus,

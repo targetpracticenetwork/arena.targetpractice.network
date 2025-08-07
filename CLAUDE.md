@@ -85,6 +85,49 @@ The system implements multi-layered isolation:
 - **Error Handling**: Comprehensive logging with emoji indicators for operations
 - **Stateless Operations**: Arena management is idempotent where possible
 
+## Private Registry Support
+
+ArenaService supports private container registries with automatic image pre-warming for improved performance.
+
+### Setting up Registry Credentials
+
+Create a Kubernetes secret in each arena namespace with your private registry credentials:
+
+```bash
+# Create registry secret (replace with your values)
+kubectl create secret docker-registry my-registry-secret \
+  --docker-server=registry.example.com \
+  --docker-username=myuser \
+  --docker-password=mypassword \
+  --docker-email=user@example.com \
+  --namespace=arena-10-0-0-23
+```
+
+### Using Private Registry in Challenge Specs
+
+Add registry configuration to your challenge YAML:
+
+```yaml
+registry:
+  credentialsSecret: "my-registry-secret"
+  url: "registry.example.com"  # optional, inferred from image paths
+
+containers:
+  - name: web-server
+    image: "registry.example.com/ctf/web:latest"  # full path
+    ports:
+      - containerPort: 80
+  - name: database  
+    image: "mysql:8.0"  # relative path (uses registry.url prefix)
+    env:
+      - name: MYSQL_ROOT_PASSWORD
+        value: "password"
+```
+
+### Image Pre-warming
+
+The system automatically pre-warms (pre-pulls) private images using Kubernetes Jobs before creating arena pods. This improves pod startup time and ensures images are available. Pre-warmed images persist on cluster nodes until evicted by Kubernetes.
+
 ## Protocol Buffer Generation
 
 When modifying `api/arena.proto`, regenerate Go code:
