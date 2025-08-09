@@ -1,6 +1,7 @@
 package arena
 
 import (
+	"context"
 	"errors"
 	"net"
 	"testing"
@@ -26,37 +27,37 @@ type mockK8sManager struct {
 	NamespaceStatus            *NamespaceStatus
 }
 
-func (m *mockK8sManager) CreateNamespace(name string, labels map[string]string) error {
+func (m *mockK8sManager) CreateNamespace(ctx context.Context, name string, labels map[string]string) error {
 	m.CreateNamespaceCalled = true
 	return m.CreateNamespaceErr
 }
-func (m *mockK8sManager) DeleteNamespace(name string) error {
+func (m *mockK8sManager) DeleteNamespace(ctx context.Context, name string) error {
 	m.DeleteNamespaceCalled = true
 	return m.DeleteNamespaceErr
 }
-func (m *mockK8sManager) CreateConfigMaps(namespace string, configMaps []*v1.ConfigMap) error { return nil }
-func (m *mockK8sManager) DeleteConfigMaps(namespace string, configMapNames []string) error  { return nil }
-func (m *mockK8sManager) CreatePods(namespace string, pods []*v1.Pod) error             { return nil }
-func (m *mockK8sManager) DeletePods(namespace string, podNames []string) error          { return nil }
-func (m *mockK8sManager) CreateServices(namespace string, services []*v1.Service) error { return nil }
-func (m *mockK8sManager) DeleteServices(namespace string, serviceNames []string) error  { return nil }
-func (m *mockK8sManager) ApplyNetworkPolicy(namespace string, vpnIP string, serviceIPs []string) error {
+func (m *mockK8sManager) CreateConfigMaps(ctx context.Context, namespace string, configMaps []*v1.ConfigMap) error { return nil }
+func (m *mockK8sManager) DeleteConfigMaps(ctx context.Context, namespace string, configMapNames []string) error  { return nil }
+func (m *mockK8sManager) CreatePods(ctx context.Context, namespace string, pods []*v1.Pod) error             { return nil }
+func (m *mockK8sManager) DeletePods(ctx context.Context, namespace string, podNames []string) error          { return nil }
+func (m *mockK8sManager) CreateServices(ctx context.Context, namespace string, services []*v1.Service) error { return nil }
+func (m *mockK8sManager) DeleteServices(ctx context.Context, namespace string, serviceNames []string) error  { return nil }
+func (m *mockK8sManager) ApplyNetworkPolicy(ctx context.Context, namespace string, vpnIP string, serviceIPs []string) error {
 	m.ApplyNetworkPolicyCalled = true
 	return m.ApplyNetworkPolicyErr
 }
-func (m *mockK8sManager) ApplyResourceQuota(namespace string, quota *ResourceUsage) error { return nil }
-func (m *mockK8sManager) GetNamespaceStatus(name string) (*NamespaceStatus, error) {
+func (m *mockK8sManager) ApplyResourceQuota(ctx context.Context, namespace string, quota *ResourceUsage) error { return nil }
+func (m *mockK8sManager) GetNamespaceStatus(ctx context.Context, name string) (*NamespaceStatus, error) {
 	m.GetNamespaceStatusCalled = true
 	if m.GetNamespaceStatusErr != nil {
 		return nil, m.GetNamespaceStatusErr
 	}
 	return m.NamespaceStatus, nil
 }
-func (m *mockK8sManager) ValidateSpec(challengeSpec string) error {
+func (m *mockK8sManager) ValidateSpec(ctx context.Context, challengeSpec string) error {
 	m.ValidateSpecCalled = true
 	return m.ValidateSpecErr
 }
-func (m *mockK8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([]*ServiceEndpoint, error) {
+func (m *mockK8sManager) CreateResourcesFromSpec(ctx context.Context, namespace, challengeSpec string) ([]*ServiceEndpoint, error) {
 	m.CreateResourcesFromSpecCalled = true
 	return m.Resources, m.CreateResourcesFromSpecErr
 }
@@ -75,7 +76,7 @@ type mockVPNManager struct {
 	CreatePeerErr    error
 	RemovePeerErr    error
 	GetPeerStatusErr error
-	PeerCfg          *PeerConfig
+	PeerConfig       *PeerConfig
 	PeerStatus       *PeerStatus
 
 	// New fields for server info
@@ -84,23 +85,23 @@ type mockVPNManager struct {
 	DefaultAllowedIPs []string
 }
 
-func (m *mockVPNManager) CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error) {
+func (m *mockVPNManager) CreatePeer(ctx context.Context, pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error) {
 	m.CreatePeerCalled = true
-	return m.PeerCfg, m.CreatePeerErr
+	return m.PeerConfig, m.CreatePeerErr
 }
-func (m *mockVPNManager) RemovePeer(pubKey string) error {
+func (m *mockVPNManager) RemovePeer(ctx context.Context, pubKey string) error {
 	m.RemovePeerCalled = true
 	return m.RemovePeerErr
 }
-func (m *mockVPNManager) GetPeerStatus(pubKey string) (*PeerStatus, error) {
+func (m *mockVPNManager) GetPeerStatus(ctx context.Context, pubKey string) (*PeerStatus, error) {
 	m.GetPeerStatusCalled = true
 	return m.PeerStatus, m.GetPeerStatusErr
 }
-func (m *mockVPNManager) RemovePeerByIP(vpnIP string) error {
+func (m *mockVPNManager) RemovePeerByIP(ctx context.Context, vpnIP string) error {
 	m.RemovePeerCalled = true
 	return m.RemovePeerErr
 }
-func (m *mockVPNManager) GetPeerStatusByIP(vpnIP string) (*PeerStatus, error) {
+func (m *mockVPNManager) GetPeerStatusByIP(ctx context.Context, vpnIP string) (*PeerStatus, error) {
 	m.GetPeerStatusCalled = true
 	return m.PeerStatus, m.GetPeerStatusErr
 }
@@ -123,6 +124,7 @@ func (m *mockVPNManager) GetDefaultAllowedIPs() []string {
 	}
 	return m.DefaultAllowedIPs
 }
+func (m *mockVPNManager) Close() error { return nil }
 func (m *mockVPNManager) GetVPNSubnet() string {
 	return "10.0.0.0/24"
 }
@@ -135,10 +137,10 @@ func TestArenaManager_CreateArena_Success(t *testing.T) {
 		Resources: []*ServiceEndpoint{{Name: "svc", ClusterIp: "10.0.0.1", Ports: []int32{80}}},
 	}
 	vpn := &mockVPNManager{
-		PeerCfg: &PeerConfig{PublicKey: "pk", AllowedIP: "10.0.0.2/32"},
+		PeerConfig: &PeerConfig{PublicKey: "pk", AllowedIP: "10.0.0.2/32"},
 	}
 	mgr := NewArenaManager(k8s, vpn)
-	cfg, err := mgr.CreateArena("pk", "10.0.0.2/32", "test-challenge", "spec")
+	cfg, err := mgr.CreateArena(context.Background(), "pk", "10.0.0.2/32", "test-challenge", "spec")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -181,7 +183,7 @@ func TestArenaManager_CreateArena_K8sError(t *testing.T) {
 	k8s := &mockK8sManager{CreateNamespaceErr: errors.New("fail")}
 	vpn := &mockVPNManager{}
 	mgr := NewArenaManager(k8s, vpn)
-	_, err := mgr.CreateArena("pk", "10.0.0.2/32", "test-challenge", "spec")
+	_, err := mgr.CreateArena(context.Background(), "pk", "10.0.0.2/32", "test-challenge", "spec")
 	if err == nil || err.Error() != "failed to create namespace: fail" {
 		t.Errorf("expected namespace error, got %v", err)
 	}
@@ -194,7 +196,7 @@ func TestArenaManager_DestroyArena_Success(t *testing.T) {
 		AllowedIps: []string{"10.0.0.2/32"},
 	}}
 	mgr := NewArenaManager(k8s, vpn)
-	err := mgr.DestroyArena("10.0.0.2/32")
+	err := mgr.DestroyArena(context.Background(), "10.0.0.2/32")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -207,9 +209,15 @@ func TestArenaManager_DestroyArena_VPNError(t *testing.T) {
 	k8s := &mockK8sManager{}
 	vpn := &mockVPNManager{RemovePeerErr: errors.New("fail")}
 	mgr := NewArenaManager(k8s, vpn)
-	err := mgr.DestroyArena("10.0.0.2/32")
-	if err == nil || err.Error() != "failed to remove VPN peer: fail" {
-		t.Errorf("expected vpn error, got %v", err)
+	err := mgr.DestroyArena(context.Background(), "10.0.0.2/32")
+	// DestroyArena should not return an error even if VPN removal fails
+	// It logs the error but continues with cleanup
+	if err != nil {
+		t.Errorf("expected no error (cleanup continues on failure), got %v", err)
+	}
+	// Verify that namespace deletion was still attempted
+	if !k8s.DeleteNamespaceCalled {
+		t.Error("expected namespace deletion to be called despite VPN error")
 	}
 }
 
@@ -226,7 +234,7 @@ func TestArenaManager_GetArenaStatus_Success(t *testing.T) {
 		AllowedIps: []string{"10.0.0.2/32"},
 	}}
 	mgr := NewArenaManager(k8s, vpn)
-	status, err := mgr.GetArenaStatus("10.0.0.2/32")
+	status, err := mgr.GetArenaStatus(context.Background(), "10.0.0.2/32")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -247,15 +255,16 @@ func TestArenaManager_GetArenaStatus_Success(t *testing.T) {
 	if status.GetNamespace() != expectedNamespace {
 		t.Errorf("expected namespace %s, got %v", expectedNamespace, status.GetNamespace())
 	}
-	if status.GetPublicKey() != "pk" {
-		t.Errorf("expected public_key 'pk', got %v", status.GetPublicKey())
+	// The PublicKey in ArenaStatus should be the server's public key (for client configuration)
+	if status.GetPublicKey() != "server-public-key" {
+		t.Errorf("expected server public_key 'server-public-key', got %v", status.GetPublicKey())
 	}
 }
 
 func TestArenaManager_GetArenaStatus_VPNError(t *testing.T) {
 	vpn := &mockVPNManager{GetPeerStatusErr: errors.New("fail")}
 	mgr := NewArenaManager(&mockK8sManager{}, vpn)
-	_, err := mgr.GetArenaStatus("10.0.0.2/32")
+	_, err := mgr.GetArenaStatus(context.Background(), "10.0.0.2/32")
 	if err == nil || err.Error() != "failed to get VPN peer status: fail" {
 		t.Errorf("expected error, got %v", err)
 	}
@@ -268,7 +277,7 @@ func TestArenaManager_GetArenaStatus_K8sError(t *testing.T) {
 		AllowedIps: []string{"10.0.0.2/32"},
 	}}
 	mgr := NewArenaManager(k8s, vpn)
-	_, err := mgr.GetArenaStatus("10.0.0.2/32")
+	_, err := mgr.GetArenaStatus(context.Background(), "10.0.0.2/32")
 	if err == nil || err.Error() != "failed to get namespace status: fail" {
 		t.Errorf("expected error, got %v", err)
 	}

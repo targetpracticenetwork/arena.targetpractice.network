@@ -19,7 +19,7 @@ func (s *ArenaServiceServerImpl) CreateArena(ctx context.Context, req *CreateAre
 	log.Printf("🎯 CreateArena request received - PublicKey: %s, VPN IP: %s, Challenge: %s",
 		req.PublicKey, req.VpnIp, req.ChallengeName)
 
-	cfg, err := s.Manager.CreateArena(req.PublicKey, req.VpnIp, req.ChallengeName, req.ChallengeSpec)
+	cfg, err := s.Manager.CreateArena(ctx, req.PublicKey, req.VpnIp, req.ChallengeName, req.ChallengeSpec)
 	if err != nil {
 		log.Printf("❌ CreateArena failed - PublicKey: %s, Error: %v", req.PublicKey, err)
 		return &CreateArenaResponse{Error: err.Error()}, nil
@@ -35,7 +35,7 @@ func (s *ArenaServiceServerImpl) CreateArena(ctx context.Context, req *CreateAre
 func (s *ArenaServiceServerImpl) DestroyArena(ctx context.Context, req *DestroyArenaRequest) (*DestroyArenaResponse, error) {
 	log.Printf("🗑️ DestroyArena request received - VPN IP: %s", req.VpnIp)
 
-	err := s.Manager.DestroyArena(req.VpnIp)
+	err := s.Manager.DestroyArena(ctx, req.VpnIp)
 	if err != nil {
 		log.Printf("❌ DestroyArena failed - VPN IP: %s, Error: %v", req.VpnIp, err)
 		return &DestroyArenaResponse{Success: false, Error: err.Error()}, nil
@@ -48,7 +48,7 @@ func (s *ArenaServiceServerImpl) DestroyArena(ctx context.Context, req *DestroyA
 func (s *ArenaServiceServerImpl) GetArenaStatus(ctx context.Context, req *GetArenaStatusRequest) (*GetArenaStatusResponse, error) {
 	log.Printf("📊 GetArenaStatus request received - VPN IP: %s", req.VpnIp)
 
-	status, err := s.Manager.GetArenaStatus(req.VpnIp)
+	status, err := s.Manager.GetArenaStatus(ctx, req.VpnIp)
 	if err != nil {
 		log.Printf("❌ GetArenaStatus failed - VPN IP: %s, Error: %v", req.VpnIp, err)
 		return &GetArenaStatusResponse{Error: err.Error()}, nil

@@ -1,31 +1,51 @@
 package arena
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
 // ArenaManager orchestrates the full lifecycle of a user arena, coordinating K8s and VPN managers.
 type ArenaManager interface {
-	CreateArena(publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error)
-	DestroyArena(vpnIP string) error
-	GetArenaStatus(vpnIP string) (*ArenaStatus, error)
+	CreateArena(ctx context.Context, publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error)
+	DestroyArena(ctx context.Context, vpnIP string) error
+	GetArenaStatus(ctx context.Context, vpnIP string) (*ArenaStatus, error)
 }
 
 // arenaManager is a concrete implementation of ArenaManager.
 type arenaManager struct {
-	k8s K8sManager
-	vpn VPNManager
+	k8s                     K8sManager
+	vpn                     VPNManager
+	creationTimeouts        sync.Map // vpnIP -> *creationTimeout
+	creationTimeoutDuration time.Duration
+}
+
+type creationTimeout struct {
+	timer     *time.Timer
+	vpnIP     string
+	startTime time.Time
 }
 
 // NewArenaManager constructs a new ArenaManager with the given dependencies.
 func NewArenaManager(k8sMgr K8sManager, vpnMgr VPNManager) ArenaManager {
 	return &arenaManager{
-		k8s: k8sMgr,
-		vpn: vpnMgr,
+		k8s:                     k8sMgr,
+		vpn:                     vpnMgr,
+		creationTimeoutDuration: 5 * time.Minute, // default 5 minutes
+	}
+}
+
+// NewArenaManagerWithTimeout constructs a new ArenaManager with a custom timeout duration.
+func NewArenaManagerWithTimeout(k8sMgr K8sManager, vpnMgr VPNManager, timeout time.Duration) ArenaManager {
+	return &arenaManager{
+		k8s:                     k8sMgr,
+		vpn:                     vpnMgr,
+		creationTimeoutDuration: timeout,
 	}
 }
 
@@ -54,13 +74,46 @@ func vpnIPToNamespace(vpnIP string) string {
 }
 
 // CreateArena provisions a new arena for the user: creates K8s resources and a VPN peer.
-func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error) {
+func (a *arenaManager) CreateArena(ctx context.Context, publicKey string, vpnIP string, challengeName string, challengeSpec string) (*ArenaConfig, error) {
 	ns := vpnIPToNamespace(vpnIP)
 	log.Printf("🏗️ Creating arena - Namespace: %s, Challenge: %s", ns, challengeName)
+
+	// Start creation timeout - this will clean up if creation fails or hangs
+	timeout := &creationTimeout{
+		vpnIP:     vpnIP,
+		startTime: time.Now(),
+	}
+
+	timeout.timer = time.AfterFunc(a.creationTimeoutDuration, func() {
+		log.Printf("⏰ Arena creation timeout reached for VPN IP: %s, cleaning up potentially failed arena", vpnIP)
+
+		// Use a new context with its own timeout for cleanup
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
+		// Check if arena was successfully created by checking its status
+		status, err := a.GetArenaStatus(cleanupCtx, vpnIP)
+		if err != nil || status == nil || !status.Healthy {
+			log.Printf("🧹 Arena appears to have failed creation, destroying resources for VPN IP: %s", vpnIP)
+			if destroyErr := a.DestroyArena(cleanupCtx, vpnIP); destroyErr != nil {
+				log.Printf("❌ Failed to destroy potentially failed arena: %v", destroyErr)
+			} else {
+				log.Printf("✅ Successfully cleaned up failed arena for VPN IP: %s", vpnIP)
+			}
+		} else {
+			log.Printf("✅ Arena is healthy, skipping cleanup for VPN IP: %s", vpnIP)
+		}
+
+		// Remove from map
+		a.creationTimeouts.Delete(vpnIP)
+	})
+
+	a.creationTimeouts.Store(vpnIP, timeout)
 
 	_, vpnIPNet, err := net.ParseCIDR(vpnIP)
 	if err != nil {
 		log.Printf("❌ Invalid VPN IP format: %s", vpnIP)
+		a.cancelCreationTimeout(vpnIP)
 		return nil, fmt.Errorf("invalid VPN IP: %s", vpnIP)
 	}
 
@@ -68,29 +121,33 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 		"arena/challenge":  challengeName,
 		"arena/created-at": time.Now().UTC().Format("20060102T150405Z"),
 		"arena/namespace":  ns,
+		"arena/creating":   "true", // Mark as still creating
 	}
 
 	// 1. Validate the challenge spec before parsing/creating resources
 	log.Printf("🔍 Validating challenge spec for namespace: %s", ns)
-	if err := a.k8s.ValidateSpec(challengeSpec); err != nil {
+	if err := a.k8s.ValidateSpec(ctx, challengeSpec); err != nil {
 		log.Printf("❌ Challenge spec validation failed: %v", err)
+		a.cancelCreationTimeout(vpnIP)
 		return nil, fmt.Errorf("invalid challenge spec: %w", err)
 	}
 	log.Printf("✅ Challenge spec validated successfully")
 
 	// 2. Create namespace for the user
 	log.Printf("📦 Creating namespace: %s", ns)
-	if err := a.k8s.CreateNamespace(ns, labels); err != nil {
+	if err := a.k8s.CreateNamespace(ctx, ns, labels); err != nil {
 		log.Printf("❌ Namespace creation failed: %v", err)
+		a.cancelCreationTimeout(vpnIP)
 		return nil, fmt.Errorf("failed to create namespace: %w", err)
 	}
 	log.Printf("✅ Namespace created: %s", ns)
 
 	// 3. Let K8sManager handle all resource creation and endpoint extraction
 	log.Printf("🚀 Creating Kubernetes resources from spec")
-	k8sEndpoints, err := a.k8s.CreateResourcesFromSpec(ns, challengeSpec)
+	k8sEndpoints, err := a.k8s.CreateResourcesFromSpec(ctx, ns, challengeSpec)
 	if err != nil {
 		log.Printf("❌ Resource creation failed: %v", err)
+		a.cancelCreationTimeout(vpnIP)
 		return nil, fmt.Errorf("failed to create resources from spec: %w", err)
 	}
 	log.Printf("✅ Kubernetes resources created - Endpoints: %d", len(k8sEndpoints))
@@ -124,8 +181,9 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 	}
 	log.Printf("🔧 Total service IPs for network policy: %d", len(serviceIPs))
 
-	if err := a.k8s.ApplyNetworkPolicy(ns, vpnIP, serviceIPs); err != nil {
+	if err := a.k8s.ApplyNetworkPolicy(ctx, ns, vpnIP, serviceIPs); err != nil {
 		log.Printf("❌ Network policy application failed: %v", err)
+		a.cancelCreationTimeout(vpnIP)
 		return nil, fmt.Errorf("failed to apply network policy: %w", err)
 	}
 	log.Printf("✅ Network policy applied with %d service IPs", len(serviceIPs))
@@ -138,6 +196,7 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 			_, serviceIPNet, err := net.ParseCIDR(serviceIP)
 			if err != nil {
 				log.Printf("❌ Invalid service IP format: %s", serviceIP)
+				a.cancelCreationTimeout(vpnIP)
 				return nil, fmt.Errorf("invalid service IP: %s", serviceIP)
 			}
 			allowedDestinations = append(allowedDestinations, *serviceIPNet)
@@ -149,9 +208,10 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 
 	// 7. Create VPN peer with proper source/destination separation
 	log.Printf("🔐 Creating VPN peer for public key: %s", publicKey)
-	peerCfg, err := a.vpn.CreatePeer(publicKey, *vpnIPNet, allowedDestinations)
+	peerCfg, err := a.vpn.CreatePeer(ctx, publicKey, *vpnIPNet, allowedDestinations)
 	if err != nil {
 		log.Printf("❌ VPN peer creation failed for public key %s: %v", publicKey, err)
+		a.cancelCreationTimeout(vpnIP)
 		return nil, fmt.Errorf("failed to create VPN peer: %w", err)
 	}
 	log.Printf("✅ VPN peer created with destination filtering - VPN IP: %s, Destinations: %d", peerCfg.AllowedIP, len(allowedDestinations))
@@ -209,24 +269,38 @@ func (a *arenaManager) CreateArena(publicKey string, vpnIP string, challengeName
 		AllowedIpsForRouting: allowedIPsForRouting,
 	}
 
+	// Mark creation as complete and cancel timeout
+	a.cancelCreationTimeout(vpnIP)
+
 	log.Printf("🎉 Arena creation completed - Namespace: %s, Endpoints: %d", ns, len(config.Endpoints))
 	return config, nil
 }
 
+// cancelCreationTimeout cancels any pending creation timeout for the given VPN IP
+func (a *arenaManager) cancelCreationTimeout(vpnIP string) {
+	if timeout, ok := a.creationTimeouts.LoadAndDelete(vpnIP); ok {
+		timeout.(*creationTimeout).timer.Stop()
+		log.Printf("⏹️ Cancelled creation timeout for VPN IP: %s", vpnIP)
+	}
+}
+
 // DestroyArena tears down all resources for the user's arena.
-func (a *arenaManager) DestroyArena(vpnIP string) error {
+func (a *arenaManager) DestroyArena(ctx context.Context, vpnIP string) error {
 	ns := vpnIPToNamespace(vpnIP)
 	log.Printf("🗑️ Destroying arena - Namespace: %s", ns)
 
+	// Cancel any pending creation timeout
+	a.cancelCreationTimeout(vpnIP)
+
 	log.Printf("🔐 Removing VPN peer for VPN IP: %s", vpnIP)
-	if err := a.vpn.RemovePeerByIP(vpnIP); err != nil {
+	if err := a.vpn.RemovePeerByIP(ctx, vpnIP); err != nil {
 		log.Printf("❌ VPN peer removal failed for VPN IP %s: %v", vpnIP, err)
 	} else {
 		log.Printf("✅ VPN peer removed")
 	}
 
 	log.Printf("📦 Deleting namespace: %s", ns)
-	if err := a.k8s.DeleteNamespace(ns); err != nil {
+	if err := a.k8s.DeleteNamespace(ctx, ns); err != nil {
 		log.Printf("❌ Namespace deletion failed: %v", err)
 	} else {
 		log.Printf("✅ Namespace deleted: %s", ns)
@@ -237,13 +311,13 @@ func (a *arenaManager) DestroyArena(vpnIP string) error {
 }
 
 // GetArenaStatus returns the current status of the user's arena.
-func (a *arenaManager) GetArenaStatus(vpnIP string) (*ArenaStatus, error) {
+func (a *arenaManager) GetArenaStatus(ctx context.Context, vpnIP string) (*ArenaStatus, error) {
 	ns := vpnIPToNamespace(vpnIP)
 	log.Printf("📊 Getting arena status - Namespace: %s", ns)
 
 	// Get VPN peer status
 	log.Printf("🔐 Getting VPN peer status for VPN IP: %s", vpnIP)
-	vpnStatus, err := a.vpn.GetPeerStatusByIP(vpnIP)
+	vpnStatus, err := a.vpn.GetPeerStatusByIP(ctx, vpnIP)
 	if err != nil {
 		log.Printf("❌ VPN peer status failed for VPN IP %s: %v", vpnIP, err)
 		return nil, fmt.Errorf("failed to get VPN peer status: %w", err)
@@ -252,7 +326,7 @@ func (a *arenaManager) GetArenaStatus(vpnIP string) (*ArenaStatus, error) {
 
 	// Get K8s namespace status
 	log.Printf("📦 Getting Kubernetes namespace status: %s", ns)
-	k8sStatus, err := a.k8s.GetNamespaceStatus(ns)
+	k8sStatus, err := a.k8s.GetNamespaceStatus(ctx, ns)
 	if err != nil {
 		log.Printf("❌ Kubernetes namespace status failed: %v", err)
 		return nil, fmt.Errorf("failed to get namespace status: %w", err)
@@ -310,4 +384,21 @@ func (a *arenaManager) GetArenaStatus(vpnIP string) (*ArenaStatus, error) {
 		ns, healthStatus, len(errors))
 
 	return status, nil
+}
+
+// Shutdown gracefully shuts down the arena manager, cancelling all pending timeouts
+func (a *arenaManager) Shutdown(ctx context.Context) error {
+	log.Printf("🛑 Shutting down arena manager, cancelling all pending timeouts")
+	
+	count := 0
+	a.creationTimeouts.Range(func(key, value interface{}) bool {
+		if timeout, ok := value.(*creationTimeout); ok {
+			timeout.timer.Stop()
+			count++
+		}
+		return true
+	})
+	
+	log.Printf("✅ Cancelled %d pending creation timeouts", count)
+	return nil
 }
