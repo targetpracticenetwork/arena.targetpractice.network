@@ -1,6 +1,7 @@
 package arena
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -16,21 +17,20 @@ type PeerConfig struct {
 	AllowedIP string
 }
 
-// VPNManager defines the interface for managing VPN peers.
+// VPNManager abstracts VPN peer management operations.
 type VPNManager interface {
-	CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error)
-	RemovePeer(pubKey string) error
-	GetPeerStatus(pubKey string) (*PeerStatus, error)
-	RemovePeerByIP(vpnIP string) error
-	GetPeerStatusByIP(vpnIP string) (*PeerStatus, error)
+	CreatePeer(ctx context.Context, pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error)
+	RemovePeer(ctx context.Context, pubKey string) error
+	GetPeerStatus(ctx context.Context, pubKey string) (*PeerStatus, error)
+	RemovePeerByIP(ctx context.Context, vpnIP string) error
+	GetPeerStatusByIP(ctx context.Context, vpnIP string) (*PeerStatus, error)
 	CheckDevice() error
 	GetServerPublicKey() (string, error)
 	GetServerEndpoint() (string, error)
 	GetDefaultAllowedIPs() []string
 
-	// CIDR configuration methods
-	GetVPNSubnet() string
-	GetServiceCIDR() string
+	// Support proper shutdown
+	Close() error
 }
 
 // WGManager is a concrete implementation of VPNManager using wgctrl.
@@ -44,8 +44,8 @@ type WGManager struct {
 	ServerHost      string // WireGuard server hostname/IP
 }
 
-// NewWGManager creates a new WGManager and initializes server configuration at startup.
-func NewWGManager(interfaceName string, vpnSubnet string, serviceCIDR string, port int, serverHost string) (*WGManager, error) {
+// NewWGManager creates a new VPN manager using WireGuard
+func NewWGManager(interfaceName string, vpnSubnet string, serviceCIDR string, port int, serverHost string) (VPNManager, error) {
 	mgr := &WGManager{
 		InterfaceName: interfaceName,
 		VPNSubnet:     vpnSubnet,
@@ -92,7 +92,7 @@ func (w *WGManager) initializeServerConfig() error {
 }
 
 // CreatePeer adds a peer to the WireGuard interface using the provided public key and destination IPs.
-func (w *WGManager) CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error) {
+func (w *WGManager) CreatePeer(ctx context.Context, pubKey string, vpnIP net.IPNet, allowedDestinations []net.IPNet) (*PeerConfig, error) {
 	log.Printf("🔐 Creating WireGuard peer - Interface: %s, Public Key: %s, VPN IP: %s",
 		w.InterfaceName, pubKey, vpnIP.String())
 
@@ -140,7 +140,7 @@ func (w *WGManager) CreatePeer(pubKey string, vpnIP net.IPNet, allowedDestinatio
 }
 
 // RemovePeer removes a peer from the WireGuard interface using the provided public key.
-func (w *WGManager) RemovePeer(pubKey string) error {
+func (w *WGManager) RemovePeer(ctx context.Context, pubKey string) error {
 	log.Printf("🗑️ Removing WireGuard peer - Interface: %s, Public Key: %s", w.InterfaceName, pubKey)
 
 	client, err := wgctrl.New()
@@ -180,7 +180,7 @@ func (w *WGManager) RemovePeer(pubKey string) error {
 }
 
 // GetPeerStatus returns information about the peer with the given public key.
-func (w *WGManager) GetPeerStatus(pubKey string) (*PeerStatus, error) {
+func (w *WGManager) GetPeerStatus(ctx context.Context, pubKey string) (*PeerStatus, error) {
 	client, err := wgctrl.New()
 	if err != nil {
 		return nil, err
@@ -258,7 +258,7 @@ func (w *WGManager) GetServiceCIDR() string {
 }
 
 // RemovePeerByIP removes a peer by finding it using its VPN IP address.
-func (w *WGManager) RemovePeerByIP(vpnIP string) error {
+func (w *WGManager) RemovePeerByIP(ctx context.Context, vpnIP string) error {
 	log.Printf("🗑️ Removing WireGuard peer by VPN IP - Interface: %s, VPN IP: %s", w.InterfaceName, vpnIP)
 
 	// Parse the VPN IP to extract just the IP address (without CIDR)
@@ -287,7 +287,7 @@ func (w *WGManager) RemovePeerByIP(vpnIP string) error {
 			peerIP := allowedIP.IP.String()
 			if peerIP == targetIP {
 				log.Printf("✅ Found peer with VPN IP %s, public key: %s", targetIP, peer.PublicKey.String())
-				return w.RemovePeer(peer.PublicKey.String())
+				return w.RemovePeer(ctx, peer.PublicKey.String())
 			}
 		}
 	}
@@ -297,7 +297,7 @@ func (w *WGManager) RemovePeerByIP(vpnIP string) error {
 }
 
 // GetPeerStatusByIP returns information about the peer with the given VPN IP address.
-func (w *WGManager) GetPeerStatusByIP(vpnIP string) (*PeerStatus, error) {
+func (w *WGManager) GetPeerStatusByIP(ctx context.Context, vpnIP string) (*PeerStatus, error) {
 	// Parse the VPN IP to extract just the IP address (without CIDR)
 	targetIP := vpnIP
 	if strings.Contains(vpnIP, "/") {
@@ -342,4 +342,11 @@ func (w *WGManager) GetPeerStatusByIP(vpnIP string) (*PeerStatus, error) {
 	}
 
 	return nil, fmt.Errorf("no peer found with VPN IP: %s", targetIP)
+}
+
+// Close gracefully closes the VPN manager
+func (w *WGManager) Close() error {
+	log.Printf("🛑 Closing WireGuard manager for interface: %s", w.InterfaceName)
+	// Currently no resources to clean up, but this provides a hook for future needs
+	return nil
 }

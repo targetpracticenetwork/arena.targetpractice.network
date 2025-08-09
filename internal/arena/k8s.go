@@ -88,21 +88,21 @@ type ResourceSpec struct {
 	Limits   map[string]string `yaml:"limits,omitempty"`
 }
 
-// K8sManager handles all Kubernetes resource management for user arenas.
+// K8sManager abstracts Kubernetes operations for arena management.
 type K8sManager interface {
-	CreateNamespace(name string, labels map[string]string) error
-	DeleteNamespace(name string) error
-	CreateConfigMaps(namespace string, configMaps []*v1.ConfigMap) error
-	DeleteConfigMaps(namespace string, configMapNames []string) error
-	CreatePods(namespace string, pods []*v1.Pod) error
-	DeletePods(namespace string, podNames []string) error
-	CreateServices(namespace string, services []*v1.Service) error
-	DeleteServices(namespace string, serviceNames []string) error
-	ApplyNetworkPolicy(namespace string, vpnIP string, serviceIPs []string) error
-	ApplyResourceQuota(namespace string, quota *ResourceUsage) error
-	GetNamespaceStatus(name string) (*NamespaceStatus, error)
-	ValidateSpec(challengeSpec string) error
-	CreateResourcesFromSpec(namespace, challengeSpec string) ([]*ServiceEndpoint, error)
+	CreateNamespace(ctx context.Context, name string, labels map[string]string) error
+	DeleteNamespace(ctx context.Context, name string) error
+	CreateConfigMaps(ctx context.Context, namespace string, configMaps []*v1.ConfigMap) error
+	DeleteConfigMaps(ctx context.Context, namespace string, configMapNames []string) error
+	CreatePods(ctx context.Context, namespace string, pods []*v1.Pod) error
+	DeletePods(ctx context.Context, namespace string, podNames []string) error
+	CreateServices(ctx context.Context, namespace string, services []*v1.Service) error
+	DeleteServices(ctx context.Context, namespace string, serviceNames []string) error
+	ApplyNetworkPolicy(ctx context.Context, namespace string, vpnIP string, serviceIPs []string) error
+	ApplyResourceQuota(ctx context.Context, namespace string, quota *ResourceUsage) error
+	GetNamespaceStatus(ctx context.Context, name string) (*NamespaceStatus, error)
+	ValidateSpec(ctx context.Context, challengeSpec string) error
+	CreateResourcesFromSpec(ctx context.Context, namespace, challengeSpec string) ([]*ServiceEndpoint, error)
 
 	// CIDR configuration methods
 	GetClusterCIDR() string
@@ -149,7 +149,7 @@ func (k *k8sManager) GetServiceCIDR() string {
 	return k.serviceCIDR
 }
 
-func (k *k8sManager) CreateNamespace(name string, labels map[string]string) error {
+func (k *k8sManager) CreateNamespace(ctx context.Context, name string, labels map[string]string) error {
 	log.Printf("📦 Creating Kubernetes namespace: %s with labels: %v", name, labels)
 	ns := &v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -157,7 +157,7 @@ func (k *k8sManager) CreateNamespace(name string, labels map[string]string) erro
 			Labels: labels,
 		},
 	}
-	_, err := k.clientset.CoreV1().Namespaces().Create(context.Background(), ns, metav1.CreateOptions{})
+	_, err := k.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	if err != nil {
 		log.Printf("❌ Failed to create namespace %s: %v", name, err)
 		return err
@@ -166,9 +166,9 @@ func (k *k8sManager) CreateNamespace(name string, labels map[string]string) erro
 	return nil
 }
 
-func (k *k8sManager) DeleteNamespace(name string) error {
+func (k *k8sManager) DeleteNamespace(ctx context.Context, name string) error {
 	log.Printf("🗑️ Deleting Kubernetes namespace: %s", name)
-	err := k.clientset.CoreV1().Namespaces().Delete(context.Background(), name, metav1.DeleteOptions{})
+	err := k.clientset.CoreV1().Namespaces().Delete(ctx, name, metav1.DeleteOptions{})
 	if err != nil {
 		log.Printf("❌ Failed to delete namespace %s: %v", name, err)
 		return err
@@ -177,9 +177,9 @@ func (k *k8sManager) DeleteNamespace(name string) error {
 	return nil
 }
 
-func (k *k8sManager) CreateConfigMaps(namespace string, configMaps []*v1.ConfigMap) error {
+func (k *k8sManager) CreateConfigMaps(ctx context.Context, namespace string, configMaps []*v1.ConfigMap) error {
 	for _, cm := range configMaps {
-		_, err := k.clientset.CoreV1().ConfigMaps(namespace).Create(context.Background(), cm, metav1.CreateOptions{})
+		_, err := k.clientset.CoreV1().ConfigMaps(namespace).Create(ctx, cm, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to create config map %s: %w", cm.Name, err)
 		}
@@ -187,9 +187,9 @@ func (k *k8sManager) CreateConfigMaps(namespace string, configMaps []*v1.ConfigM
 	return nil
 }
 
-func (k *k8sManager) DeleteConfigMaps(namespace string, configMapNames []string) error {
+func (k *k8sManager) DeleteConfigMaps(ctx context.Context, namespace string, configMapNames []string) error {
 	for _, name := range configMapNames {
-		err := k.clientset.CoreV1().ConfigMaps(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
+		err := k.clientset.CoreV1().ConfigMaps(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to delete config map %s: %w", name, err)
 		}
@@ -197,9 +197,9 @@ func (k *k8sManager) DeleteConfigMaps(namespace string, configMapNames []string)
 	return nil
 }
 
-func (k *k8sManager) CreatePods(namespace string, pods []*v1.Pod) error {
+func (k *k8sManager) CreatePods(ctx context.Context, namespace string, pods []*v1.Pod) error {
 	for _, pod := range pods {
-		_, err := k.clientset.CoreV1().Pods(namespace).Create(context.Background(), pod, metav1.CreateOptions{})
+		_, err := k.clientset.CoreV1().Pods(namespace).Create(ctx, pod, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to create pod %s: %w", pod.Name, err)
 		}
@@ -207,9 +207,9 @@ func (k *k8sManager) CreatePods(namespace string, pods []*v1.Pod) error {
 	return nil
 }
 
-func (k *k8sManager) DeletePods(namespace string, podNames []string) error {
+func (k *k8sManager) DeletePods(ctx context.Context, namespace string, podNames []string) error {
 	for _, name := range podNames {
-		err := k.clientset.CoreV1().Pods(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
+		err := k.clientset.CoreV1().Pods(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to delete pod %s: %w", name, err)
 		}
@@ -217,9 +217,9 @@ func (k *k8sManager) DeletePods(namespace string, podNames []string) error {
 	return nil
 }
 
-func (k *k8sManager) CreateServices(namespace string, services []*v1.Service) error {
+func (k *k8sManager) CreateServices(ctx context.Context, namespace string, services []*v1.Service) error {
 	for _, svc := range services {
-		_, err := k.clientset.CoreV1().Services(namespace).Create(context.Background(), svc, metav1.CreateOptions{})
+		_, err := k.clientset.CoreV1().Services(namespace).Create(ctx, svc, metav1.CreateOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to create service %s: %w", svc.Name, err)
 		}
@@ -227,9 +227,9 @@ func (k *k8sManager) CreateServices(namespace string, services []*v1.Service) er
 	return nil
 }
 
-func (k *k8sManager) DeleteServices(namespace string, serviceNames []string) error {
+func (k *k8sManager) DeleteServices(ctx context.Context, namespace string, serviceNames []string) error {
 	for _, name := range serviceNames {
-		err := k.clientset.CoreV1().Services(namespace).Delete(context.Background(), name, metav1.DeleteOptions{})
+		err := k.clientset.CoreV1().Services(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to delete service %s: %w", name, err)
 		}
@@ -237,7 +237,7 @@ func (k *k8sManager) DeleteServices(namespace string, serviceNames []string) err
 	return nil
 }
 
-func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string, serviceIPs []string) error {
+func (k *k8sManager) ApplyNetworkPolicy(ctx context.Context, namespace string, vpnIP string, serviceIPs []string) error {
 	// Parse the VPN IP to ensure it's a valid CIDR
 	_, ipnet, err := net.ParseCIDR(vpnIP)
 	if err != nil {
@@ -297,11 +297,11 @@ func (k *k8sManager) ApplyNetworkPolicy(namespace string, vpnIP string, serviceI
 			},
 		},
 	}
-	_, err = k.clientset.NetworkingV1().NetworkPolicies(namespace).Create(context.Background(), policy, metav1.CreateOptions{})
+	_, err = k.clientset.NetworkingV1().NetworkPolicies(namespace).Create(ctx, policy, metav1.CreateOptions{})
 	return err
 }
 
-func (k *k8sManager) ApplyResourceQuota(namespace string, quota *ResourceUsage) error {
+func (k *k8sManager) ApplyResourceQuota(ctx context.Context, namespace string, quota *ResourceUsage) error {
 	resourceQuota := &v1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "arena-quota",
@@ -315,22 +315,22 @@ func (k *k8sManager) ApplyResourceQuota(namespace string, quota *ResourceUsage) 
 			},
 		},
 	}
-	_, err := k.clientset.CoreV1().ResourceQuotas(namespace).Create(context.Background(), resourceQuota, metav1.CreateOptions{})
+	_, err := k.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, resourceQuota, metav1.CreateOptions{})
 	return err
 }
 
-func (k *k8sManager) GetNamespaceStatus(name string) (*NamespaceStatus, error) {
-	ns, err := k.clientset.CoreV1().Namespaces().Get(context.Background(), name, metav1.GetOptions{})
+func (k *k8sManager) GetNamespaceStatus(ctx context.Context, name string) (*NamespaceStatus, error) {
+	ns, err := k.clientset.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	pods, err := k.clientset.CoreV1().Pods(name).List(context.Background(), metav1.ListOptions{})
+	pods, err := k.clientset.CoreV1().Pods(name).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	services, err := k.clientset.CoreV1().Services(name).List(context.Background(), metav1.ListOptions{})
+	services, err := k.clientset.CoreV1().Services(name).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -390,7 +390,7 @@ func (k *k8sManager) GetNamespaceStatus(name string) (*NamespaceStatus, error) {
 	serviceStatuses := make([]*ServiceStatus, 0, serviceCount)
 
 	for _, svc := range services.Items {
-		endpoints, err := k.clientset.CoreV1().Endpoints(name).Get(context.Background(), svc.Name, metav1.GetOptions{})
+		endpoints, err := k.clientset.CoreV1().Endpoints(name).Get(ctx, svc.Name, metav1.GetOptions{})
 		ready := err == nil && len(endpoints.Subsets) > 0 && len(endpoints.Subsets[0].Addresses) > 0
 		if ready {
 			servicesReady++
@@ -418,14 +418,14 @@ func (k *k8sManager) GetNamespaceStatus(name string) (*NamespaceStatus, error) {
 
 	// Check if network policy exists
 	networkPolicyApplied := false
-	policies, err := k.clientset.NetworkingV1().NetworkPolicies(name).List(context.Background(), metav1.ListOptions{})
+	policies, err := k.clientset.NetworkingV1().NetworkPolicies(name).List(ctx, metav1.ListOptions{})
 	if err == nil && len(policies.Items) > 0 {
 		networkPolicyApplied = true
 	}
 
 	// Get resource quota
 	var resourceUsage *ResourceUsage
-	quotas, err := k.clientset.CoreV1().ResourceQuotas(name).List(context.Background(), metav1.ListOptions{})
+	quotas, err := k.clientset.CoreV1().ResourceQuotas(name).List(ctx, metav1.ListOptions{})
 	if err == nil && len(quotas.Items) > 0 {
 		quota := quotas.Items[0]
 		resourceUsage = &ResourceUsage{
@@ -455,7 +455,7 @@ func (k *k8sManager) GetNamespaceStatus(name string) (*NamespaceStatus, error) {
 	}, nil
 }
 
-func (k *k8sManager) ValidateSpec(challengeSpec string) error {
+func (k *k8sManager) ValidateSpec(ctx context.Context, challengeSpec string) error {
 	// Basic validation: must be valid YAML and contain at least a 'pods' list
 	var spec map[string]interface{}
 	if err := yaml.Unmarshal([]byte(challengeSpec), &spec); err != nil {
@@ -476,7 +476,7 @@ func (k *k8sManager) ValidateSpec(challengeSpec string) error {
 	return nil
 }
 
-func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([]*ServiceEndpoint, error) {
+func (k *k8sManager) CreateResourcesFromSpec(ctx context.Context, namespace, challengeSpec string) ([]*ServiceEndpoint, error) {
 	log.Printf("🚀 Creating resources from spec in namespace: %s", namespace)
 
 	// Parse the challenge spec
@@ -519,7 +519,7 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 	// Create the config maps
 	if len(configMaps) > 0 {
 		log.Printf("🚀 Creating %d config maps in namespace: %s", len(configMaps), namespace)
-		if err := k.CreateConfigMaps(namespace, configMaps); err != nil {
+		if err := k.CreateConfigMaps(ctx, namespace, configMaps); err != nil {
 			log.Printf("❌ Failed to create config maps: %v", err)
 			return nil, fmt.Errorf("failed to create config maps: %w", err)
 		}
@@ -541,7 +541,7 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 
 	// Create the pods
 	log.Printf("🚀 Creating %d pods in namespace: %s", len(pods), namespace)
-	if err := k.CreatePods(namespace, pods); err != nil {
+	if err := k.CreatePods(ctx, namespace, pods); err != nil {
 		log.Printf("❌ Failed to create pods: %v", err)
 		return nil, fmt.Errorf("failed to create pods: %w", err)
 	}
@@ -563,7 +563,7 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 	// Create the services
 	if len(services) > 0 {
 		log.Printf("🚀 Creating %d services in namespace: %s", len(services), namespace)
-		if err := k.CreateServices(namespace, services); err != nil {
+		if err := k.CreateServices(ctx, namespace, services); err != nil {
 			log.Printf("❌ Failed to create services: %v", err)
 			return nil, fmt.Errorf("failed to create services: %w", err)
 		}
@@ -574,7 +574,7 @@ func (k *k8sManager) CreateResourcesFromSpec(namespace, challengeSpec string) ([
 	var endpoints []*ServiceEndpoint
 	for _, svcSpec := range spec.Services {
 		log.Printf("🔍 Fetching service details: %s", svcSpec.Name)
-		createdSvc, err := k.clientset.CoreV1().Services(namespace).Get(context.Background(), svcSpec.Name, metav1.GetOptions{})
+		createdSvc, err := k.clientset.CoreV1().Services(namespace).Get(ctx, svcSpec.Name, metav1.GetOptions{})
 		if err != nil {
 			log.Printf("❌ Failed to get created service %s: %v", svcSpec.Name, err)
 			return nil, fmt.Errorf("failed to get created service %s: %w", svcSpec.Name, err)
@@ -859,7 +859,7 @@ func (k *k8sManager) isPrivateRegistryImage(image, registryURL string) bool {
 		return true
 	}
 	
-	// If image has a different registry host (contains . or :), it's not from this registry
+    // If image has a different registry host (contains . or :), it's not from this registry
 	if strings.Contains(image, "/") {
 		parts := strings.SplitN(image, "/", 2)
 		firstPart := parts[0]
@@ -868,9 +868,10 @@ func (k *k8sManager) isPrivateRegistryImage(image, registryURL string) bool {
 		}
 	}
 	
-	// If image is a simple name (no /), it could be from this registry
-	// But we should be more conservative and only treat it as private if it's explicitly configured
-	return false
+    // For simple or relative image names (no explicit registry host),
+    // treat as private when a registry URL is configured. They will be
+    // normalized to the configured registry and require imagePullSecrets.
+    return true
 }
 
 // isDockerHubImage determines if an image is from Docker Hub

@@ -1,6 +1,7 @@
 package arena
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -64,7 +65,7 @@ func TestK8sManager_ValidateSpec(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := mgr.ValidateSpec(tt.spec)
+			err := mgr.ValidateSpec(context.Background(), tt.spec)
 			if tt.wantErr && err == nil {
 				t.Errorf("expected error, got nil")
 			}
