@@ -31,16 +31,6 @@ NetworkPolicy may block kubelet’s HTTP probes when they originate from node IP
 - base_url: `http://aibroker.ai-broker.svc.cluster.local`
   - The broker forwards to `https://api.deepseek.com/v1` with Authorization injected.
 
-### Optional: syncing node IPs for HTTP probes (not needed with exec probes)
-
-If you ever switch back to HTTP probes, you can allow kubelet source IPs by syncing node InternalIPs into the NetworkPolicy’s `kubelet-allow` rule:
-
-```bash
-make sync-node-ips
-```
-
-This updates `cluster/ai-broker/networkpolicy.yaml` with `/32` entries and applies it. It is disabled by default and not required for the current exec-probe configuration.
-
 ### Management Commands
 
 - `make k3s-deploy-aibroker` - Deploy/update the broker

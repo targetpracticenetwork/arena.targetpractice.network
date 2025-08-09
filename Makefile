@@ -3,7 +3,7 @@
 # Variables
 KUSTOMIZE_AIBROKER_DIR ?= ./cluster/ai-broker
 
-.PHONY: build build-aibroker test k3s-setup k3s-stop k3s-clean setup k3s-deploy-aibroker k3s-restart-aibroker k3s-status-aibroker k3s-logs-aibroker k3s-delete-aibroker sync-node-ips
+.PHONY: build build-aibroker test k3s-setup k3s-stop k3s-clean setup k3s-deploy-aibroker k3s-restart-aibroker k3s-status-aibroker k3s-logs-aibroker k3s-delete-aibroker
 
 # Build the Go application
 build:
