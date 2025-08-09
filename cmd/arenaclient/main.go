@@ -268,6 +268,15 @@ func handleStatus(ctx context.Context, client arena.ArenaServiceClient, args []s
 			fmt.Printf("  Resource Usage: CPU=%s, Memory=%s, Pods=%s\n",
 				status.K8SStatus.ResourceUsage.Cpu, status.K8SStatus.ResourceUsage.Memory, status.K8SStatus.ResourceUsage.Pods)
 		}
+
+		// Display services with their IPs
+		if len(status.K8SStatus.Services) > 0 {
+			fmt.Println("\n  Services:")
+			for _, service := range status.K8SStatus.Services {
+				fmt.Printf("    - %s: %s:%v (Type: %s, Ready: %t, Endpoints: %d)\n",
+					service.Name, service.ClusterIp, service.Ports, service.Type, service.Ready, service.Endpoints)
+			}
+		}
 	}
 }
 
