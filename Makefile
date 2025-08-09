@@ -5,6 +5,7 @@
 # Build the Go application
 build:
 	go build -o bin/arenaservice ./cmd/arenaservice
+	go build -o bin/arenaclient ./cmd/arenaclient
 
 # Build static binary for k3s deployment
 build-static:
