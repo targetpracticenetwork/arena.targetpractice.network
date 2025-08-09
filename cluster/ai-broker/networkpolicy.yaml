@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aibroker-ingress
+spec:
+  podSelector:
+    matchLabels: { app: aibroker }
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: arena/namespace
+                operator: Exists
+      ports:
+        - protocol: TCP
+          port: 80
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 80
+  # No egress restrictions in simple mode; rely on cluster egress controls

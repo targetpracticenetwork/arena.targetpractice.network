@@ -1,0 +1,35 @@
+# Build stage
+FROM golang:1.22 AS builder
+
+WORKDIR /src
+
+# Copy go mod and sum files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o aibroker ./cmd/aibroker
+
+# Runtime stage
+FROM gcr.io/distroless/static:nonroot
+
+# Copy the binary from builder stage
+COPY --from=builder /src/aibroker /aibroker
+
+# Use nonroot user
+USER nonroot:nonroot
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["/aibroker", "--health-check"] || exit 1
+
+# Expose port
+EXPOSE 8080
+
+# Set entrypoint
+ENTRYPOINT ["/aibroker"]

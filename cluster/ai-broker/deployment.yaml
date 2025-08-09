@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aibroker
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: aibroker }
+  template:
+    metadata:
+      labels: { app: aibroker }
+    spec:
+      serviceAccountName: aibroker
+      containers:
+        - name: aibroker
+          image: docker.io/library/alpine:latest
+          command: ["/bin/sh"]
+          args:
+            - -c
+            - |
+              echo "🚀 Starting AI Broker..."
+              exec /opt/aibroker/aibroker-static
+          ports:
+            - name: http
+              containerPort: 80
+          envFrom:
+            - secretRef:
+                name: aibroker-env
+          env:
+            - name: BROKER_LISTEN_ADDR
+              value: ":80"
+          readinessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "wget -q -T 2 -O - http://127.0.0.1/readyz >/dev/null 2>&1 || exit 1"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["/bin/sh", "-c", "wget -q -T 2 -O - http://127.0.0.1/healthz >/dev/null 2>&1 || exit 1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: aibroker-binary
+              mountPath: /opt/aibroker
+      volumes:
+        - name: aibroker-binary
+          hostPath:
+            path: /home/topman/arena.targetpractice.network/bin
+            type: Directory

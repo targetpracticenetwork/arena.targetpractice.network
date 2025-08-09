@@ -1,0 +1,10 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: ai-broker
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - deployment.yaml
+  - service-aibroker.yaml
+  - networkpolicy.yaml
+# The real secret should not be committed. Users create it via kubectl CLI (see README.md)
