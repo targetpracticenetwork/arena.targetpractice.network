@@ -39,19 +39,19 @@ func LoadConfig() (*BrokerConfig, error) {
 
     // Dead-simple single-mapping configuration
     internalHost := getEnv("AIBROKER_INTERNAL_HOST", "aibroker")
-    upstreamURLStr := getEnv("AIBROKER_UPSTREAM_URL", "https://api.deepseek.com/v1")
+    upstreamURLStr := getEnv("OPENAI_BASE_URL", getEnv("AIBROKER_UPSTREAM_URL", "https://api.deepseek.com/v1"))
 
     upstreamURL, err := url.Parse(upstreamURLStr)
     if err != nil {
-        return nil, fmt.Errorf("invalid AIBROKER_UPSTREAM_URL: %w", err)
+        return nil, fmt.Errorf("invalid OPENAI_BASE_URL / AIBROKER_UPSTREAM_URL: %w", err)
     }
     if upstreamURL.Scheme != "https" {
-        return nil, fmt.Errorf("AIBROKER_UPSTREAM_URL must use https")
+        return nil, fmt.Errorf("OPENAI_BASE_URL / AIBROKER_UPSTREAM_URL must use https")
     }
 
-    token := getEnv("AIBROKER_TOKEN", "")
+    token := getEnv("OPENAI_API_KEY", getEnv("AIBROKER_TOKEN", ""))
     if token == "" {
-        return nil, fmt.Errorf("AIBROKER_TOKEN is required")
+        return nil, fmt.Errorf("OPENAI_API_KEY (or AIBROKER_TOKEN) is required")
     }
 
     timeout := time.Duration(getIntEnv("AIBROKER_TIMEOUT_MS", 60000)) * time.Millisecond
